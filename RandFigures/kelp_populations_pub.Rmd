@@ -1,0 +1,261 @@
+---
+title: "*Macrocystis pyrifera* — Study Population Maps"
+subtitle: "IMAS Honours 2026 — Harry Silke"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=7, dpi=150)
+```
+
+## Setup
+
+```{r libraries}
+library(ggplot2)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggrepel)
+library(cowplot)
+```
+
+## Shared data
+
+```{r base-data}
+states <- ne_countries(country = "Australia", scale = "medium", returnclass = "sf")
+aus_states <- ne_countries(country = "Australia", scale = "medium", returnclass = "sf")
+
+# Population colours — kept for point fill only, everything else B&W
+pop_colours <- c(
+  "Frederick Henry &\nStorm Bays"             = "#1a6b8a",
+  "St Helens &\nShelly Points"                = "#e07b39",
+  "Actaeon Island, Sisters\n& Recherche Bays" = "#2e8b57",
+  "Mersey & Leven\nRiver Mouths"              = "#8b2fc9",
+  "Wilderness Coast"                          = "#c0392b"
+)
+
+# Publication-style base theme — B&W
+base_theme <- theme_bw(base_size = 10) +
+  theme(
+    plot.title        = element_text(face = "bold", size = 10, colour = "black"),
+    plot.subtitle     = element_text(size = 8, colour = "grey30"),
+    plot.caption      = element_text(size = 7, colour = "grey50", hjust = 0),
+    panel.background  = element_rect(fill = "white", colour = "black"),
+    panel.grid.major  = element_line(colour = "grey90", linewidth = 0.3),
+    panel.grid.minor  = element_blank(),
+    plot.background   = element_rect(fill = "white", colour = NA),
+    plot.margin       = margin(5, 5, 5, 5),
+    legend.background = element_rect(fill = "white", colour = "grey70",
+                                     linewidth = 0.3),
+    legend.title      = element_text(size = 8, face = "bold"),
+    legend.text       = element_text(size = 7),
+    legend.key.size   = unit(0.4, "cm"),
+    legend.position   = "top",
+    legend.direction  = "horizontal",
+    axis.title        = element_text(size = 8),
+    axis.text         = element_text(size = 7)
+  )
+```
+
+## Site data
+
+```{r sites-data}
+sites <- data.frame(
+  site = c("SIS", "9PN", "PTI", "FSH", "ACT",
+           "LSI", "IOC", "TIN",
+           "BBB", "SHL", "GRG", "COB", "BCR",
+           "ULV", "DEV", "BPT"),
+  location = c(
+    "Sisters Bay", "Ninepin Point", "Partridge Island",
+    "Fishers Point", "Actaeon Island",
+    "Little Spectacle Is.", "Isle of Caves", "Tinderbox",
+    "Beerbarrel Beach", "Shelly Point", "George Rocks",
+    "Cobler Rocks", "Ben's Creek",
+    "Black Jack Rock", "Devonport", "Bridport"
+  ),
+  lon = c(
+    147.0233, 147.1721, 147.1026, 146.9266, 146.9943,
+    147.5995, 147.6505, 147.3448,
+    148.3599, 148.2785, 148.3276, 148.2631, 148.3037,
+    146.1649, 146.3702, 147.3872
+  ),
+  lat = c(
+    -43.4260, -43.2839, -43.3911, -43.5742, -43.5258,
+    -42.8674, -42.9083, -43.0482,
+    -41.2835, -41.4353, -40.9246, -40.8908, -40.9409,
+    -41.1361, -41.1670, -40.9816
+  ),
+  population = c(
+    rep("Actaeon Island, Sisters\n& Recherche Bays", 5),
+    rep("Frederick Henry &\nStorm Bays", 3),
+    rep("St Helens &\nShelly Points", 5),
+    rep("Mersey & Leven\nRiver Mouths", 3)
+  )
+)
+
+wilderness <- data.frame(
+  site       = c("PHK", "DIP", "LRA", "SDP"),
+  location   = c("Stable Bay", "Petrel Point", "Little Rame Head", "Sandpatch Point"),
+  lon        = c(149.2816, 149.4323, 149.6374, 149.6060),
+  lat        = c(-37.7979, -37.7809, -37.6960, -37.7096),
+  population = "Wilderness Coast"
+)
+
+sites_all <- rbind(sites, wilderness)
+
+
+# Victorian sites for context
+vic_sites <- data.frame(
+  location = c("Cape Otway", "Childers Cove", "Port Campbell"),
+  lon      = c(143.5376, 142.6731, 142.9747),
+  lat      = c(-38.8548, -38.4897, -38.6261),
+  population = "West VIC"
+)
+```
+
+## Main map
+
+```{r main-map, fig.width=10, fig.height=7}
+
+# Inset box coordinates — SE Tasmania cluster
+inset_xlim <- c(146.7, 147.9)
+inset_ylim <- c(-43.7, -42.7)
+
+# Main map extent
+xlim_main <- c(141.0, 150.8)
+ylim_main <- c(-44.8, -36.5)
+
+p_main <- ggplot() +
+  geom_sf(data = aus_states,
+          fill = "grey95", colour = "grey40", linewidth = 0.3) +
+  coord_sf(xlim = xlim_main, ylim = ylim_main, expand = FALSE) +
+  # Study population sites
+  geom_point(
+    data  = sites_all,
+    aes(x = lon, y = lat, fill = population),
+    shape = 21, size = 3, stroke = 0.6, colour = "black"
+  ) +
+  # Labels for non-clustered sites only (exclude SE TAS cluster — shown in inset)
+  geom_text_repel(
+    data  = subset(sites_all, lat > -42.6 & location != "Tinderbox"),
+    aes(x = lon, y = lat, label = location, colour = population),
+    size          = 2.2,
+    lineheight    = 0.85,
+    box.padding   = unit(0.25, "lines"),
+    point.padding = unit(0.25, "lines"),
+    segment.size  = 0.3,
+    max.overlaps  = 25,
+    seed          = 42,
+    show.legend   = FALSE
+  ) +
+  scale_fill_manual(values = pop_colours, name = "Region") +
+  scale_colour_manual(values = pop_colours) +
+  # Inset box outline
+  annotate("rect",
+           xmin = inset_xlim[1], xmax = inset_xlim[2],
+           ymin = inset_ylim[1], ymax = inset_ylim[2],
+           fill = NA, colour = "black", linewidth = 0.6) +
+  # State labels
+  annotate("text", x = 146.0, y = -42.0, label = "Tasmania",
+           fontface = "italic", colour = "grey30", size = 3.5) +
+  annotate("text", x = 144.5, y = -37.8, label = "Victoria",
+           fontface = "italic", colour = "grey30", size = 3.0) +
+  annotate("text", x = 139.5, y = -36.8, label = "South Australia",
+           fontface = "italic", colour = "grey30", size = 3.0) +
+  scale_x_continuous(name = "Longitude",
+                     breaks = seq(139, 151, 3),
+                     labels = function(x) paste0(x, "\u00b0E")) +
+  scale_y_continuous(name = "Latitude",
+                     breaks = seq(-44, -37, 2),
+                     labels = function(y) paste0(abs(y), "\u00b0S")) +
+  base_theme +
+  guides(fill   = guide_legend(override.aes = list(size = 3.5), nrow = 2),
+         colour = "none")
+
+p_main
+```
+
+## Inset map — SE Tasmania cluster
+
+```{r inset-map, fig.width=4, fig.height=4}
+
+# SE Tasmania sites only
+se_tas <- subset(sites_all, lat <= -42.6)
+
+p_inset <- ggplot() +
+  geom_sf(data = aus_states,
+          fill = "grey95", colour = "grey40", linewidth = 0.3) +
+  coord_sf(xlim = inset_xlim, ylim = inset_ylim, expand = FALSE) +
+  geom_point(
+    data  = se_tas,
+    aes(x = lon, y = lat, fill = population),
+    shape = 21, size = 3, stroke = 0.6, colour = "black"
+  ) +
+  geom_text_repel(
+    data  = se_tas,
+    aes(x = lon, y = lat, label = location, colour = population),
+    size          = 2.0,
+    lineheight    = 0.85,
+    box.padding   = unit(0.2, "lines"),
+    point.padding = unit(0.2, "lines"),
+    segment.size  = 0.3,
+    max.overlaps  = 30,
+    seed          = 42,
+    show.legend   = FALSE
+  ) +
+  scale_fill_manual(values = pop_colours) +
+  scale_colour_manual(values = pop_colours) +
+  scale_x_continuous(name = NULL,
+                     breaks = seq(146.8, 147.8, 0.4),
+                     labels = function(x) paste0(x, "\u00b0E")) +
+  scale_y_continuous(name = NULL,
+                     breaks = seq(-43.6, -42.8, 0.4),
+                     labels = function(y) paste0(abs(y), "\u00b0S")) +
+
+  theme_bw(base_size = 8) +
+  theme(
+    panel.background = element_rect(fill = "white", colour = "black",
+                                    linewidth = 0.8),
+    panel.grid.major = element_line(colour = "grey90", linewidth = 0.3),
+    panel.grid.minor = element_blank(),
+    plot.background  = element_rect(fill = "white", colour = "black",
+                                    linewidth = 0.8),
+    axis.text        = element_text(size = 6),
+    legend.position  = "none",
+    plot.margin      = margin(2, 2, 2, 2)
+  )
+
+p_inset
+```
+
+## Combined figure with inset
+
+```{r combined, fig.width=10, fig.height=7, fig.cap="**Figure 2.** Sampling sites for five genetically distinct *Macrocystis pyrifera* populations used in this study, across Tasmania and southeast mainland Australia. Sites are colour-coded by population group. The inset shows the southeast Tasmanian cluster in greater detail. South Australian sites (grey) are shown for geographic context only and are not part of the crossing experiment. Coordinates from the CSIRO population genomic survey (Scharfenstein et al., 2026)."}
+
+# Combine main map and inset using cowplot
+combined <- ggdraw(p_main) +
+  draw_plot(
+    p_inset,
+    x = 0.71, y = 0.02,
+    width = 0.32, height = 0.42
+  )
+combined
+```
+
+## Save outputs
+
+```{r save, eval=TRUE}
+ggsave("kelp_map_publication_good.png",
+       plot = combined, width = 10, height = 7, dpi = 300, bg = "white")
+
+ggsave("kelp_map_main_only.png",
+       plot = p_main, width = 10, height = 7, dpi = 300, bg = "white")
+
+ggsave("kelp_map_inset_only.png",
+       plot = p_inset, width = 4, height = 4, dpi = 300, bg = "white")
+```

@@ -1,0 +1,91 @@
+---
+title: "Macrocystis pyrifera — Simplified Study Map"
+subtitle: "IMAS Honours 2026 — Harry Silke"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+# Load necessary libraries
+library(ggplot2)
+library(sf)
+library(rnaturalearth)
+library(dplyr)
+library(ggrepel)
+
+# Load Australia/Tasmania state boundaries
+aus <- ne_states(country = "australia", returnclass = "sf")
+
+# Define your population colors (matching your original scheme)
+pop_colours <- c(
+  "Frederick Henry &\nStorm Bays"               = "#1a6b8a",
+  "St Helens &\nShelly Points"                  = "#e07b39",
+  "Actaeon Island, Sisters\n& Recherche Bays"   = "#2e8b57",
+  "Mersey & Leven\nRiver Mouths"                = "#8b2fc9",
+  "Wilderness Coast"                            = "#c0392b"
+)
+
+# Site Data (Simplified for high-level PowerPoint visibility)
+sites_all <- data.frame(
+  population = c(
+    rep("Actaeon Island, Sisters\n& Recherche Bays", 5),
+    rep("Frederick Henry &\nStorm Bays", 3),
+    rep("St Helens &\nShelly Points", 5),
+    rep("Mersey & Leven\nRiver Mouths", 3),
+    "Wilderness Coast"
+  ),
+  lon = c(147.02, 147.17, 147.10, 146.92, 146.99, 147.59, 147.65, 147.34, 
+          148.35, 148.27, 148.32, 148.26, 148.30, 146.16, 146.37, 147.38, 149.50),
+  lat = c(-43.42, -43.28, -43.39, -43.57, -43.52, -42.86, -42.90, -43.04, 
+          -41.28, -41.43, -40.92, -40.89, -40.94, -41.13, -41.16, -40.98, -37.75)
+)
+
+# Summarize into 5 central points so the map isn't cluttered at small sizes
+pop_summary <- sites_all %>%
+  group_by(population) %>%
+  summarize(lon = mean(lon), lat = mean(lat))
+
+p_ppt <- ggplot() +
+  # Draw the landmass with clean white borders
+  geom_sf(data = aus, fill = "grey92", colour = "white", linewidth = 0.4) +
+  
+  # Focus the window on the study regions
+  coord_sf(xlim = c(143.5, 150.5), ylim = c(-44, -37.5), expand = FALSE) +
+  
+  # Large, high-visibility points for the 5 populations
+  geom_point(data = pop_summary, 
+             aes(x = lon, y = lat, fill = population), 
+             shape = 21, size = 8, stroke = 1.5, colour = "black") +
+  
+  # Bold labels with white background shadows for legibility
+  geom_text_repel(data = pop_summary,
+                  aes(x = lon, y = lat, label = population),
+                  size = 4.5, 
+                  fontface = "bold",
+                  lineheight = 0.9,
+                  box.padding = 1.5, 
+                  point.padding = 0.8,
+                  bg.color = "white", 
+                  bg.r = 0.15,
+                  min.segment.length = 0) +
+  
+  # Apply colors and clean "void" theme for slides
+  scale_fill_manual(values = pop_colours) +
+  theme_void() + 
+  theme(
+    legend.position = "none",
+    plot.background = element_rect(fill = "white", colour = NA),
+    plot.margin = margin(20, 20, 20, 20)
+  )
+
+# Display plot
+p_ppt
+
+# This will save a high-resolution version to your project folder
+ggsave("Kelp_Study_Map_For_PPT.png", p_ppt, width = 8, height = 8, dpi = 300)
+
+```

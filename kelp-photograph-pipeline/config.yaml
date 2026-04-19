@@ -1,0 +1,104 @@
+# ============================================================
+# Kelp Reflectance Pipeline — Master Config
+# Harry Silke — Honours
+# ============================================================
+# This is the ONLY file you need to edit regularly.
+# Add a new time_point block each session. Everything else
+# is handled automatically by the pipeline.
+# ============================================================
+
+# -- Paths ----------------------------------------------------
+paths:
+  images_dir: /Users/harrysilke/Library/CloudStorage/OneDrive-AustralianNationalUniversity/Honours/kelp_growth_photos
+
+  macros_dir: /Users/harrysilke/Desktop/UNI/Honours/imas_hons/kelp-photograph-pipeline/macros
+  calibrations_dir: /Users/harrysilke/Desktop/UNI/Honours/imas_hons/kelp-photograph-pipeline/calibrations
+  roi_maps_dir: /Users/harrysilke/Desktop/UNI/Honours/imas_hons/kelp-photograph-pipeline/roi_maps
+  results_dir: /Users/harrysilke/Desktop/UNI/Honours/imas_hons/kelp-photograph-pipeline/results/raw
+
+  fiji_executable: /Users/harrysilke/Desktop/Fiji.app/Contents/MacOS/ImageJ-macosx
+
+# -- ROI map --------------------------------------------------
+# One map used for every time point — never changes
+roi_map: ROI_Map.zip
+
+# ROI labels and what they map to in the filename
+# Filename convention: sampleID1_sampleID2_DDMMYY.jpg
+roi_labels:
+  left: sampleID1    # first ID in filename
+  right: sampleID2   # second ID in filename
+
+# -- Calibration ----------------------------------------------
+# Known reflectance values on calibration target (order must
+# match the ROI order in your calibration macro)
+reflectance_standards:
+  - 99.99
+  - 59.10
+  - 36.20
+  - 22.25
+  - 9.00
+  - 3.10
+
+calibration_function: "4th Degree Polynomial"
+
+# Calibration image filename pattern (DDMMYY will be filled in)
+# Must be consistent across all date folders
+calibration_filename_prefix: "calibration_"
+
+# -- Image registration ---------------------------------------
+registration:
+  # The photo used to draw ROI_Map.zip — all other images are aligned to this.
+  # Path relative to images_dir, formatted as: date_label/filename.jpg
+  reference_image: 10.03.2026/C11_C8_100326.tif
+
+  # Confidence threshold 0-1. Images below this are flagged for manual review.
+  confidence_threshold: 0.75
+
+  # "orb" = feature-based (best for images with visible tray/background features)
+  # "phase" = phase correlation (best for pure translation shifts only)
+  method: orb
+
+  # ORB tuning (only used when method: orb)
+  orb_n_features: 2000       # keypoints to detect per image
+  lowe_ratio: 0.75           # ratio test threshold (lower = stricter matching)
+  ransac_threshold: 5.0      # reprojection error tolerance in pixels
+
+# -- Measurements ---------------------------------------------
+measurements:
+  set_measurements:
+    - area
+    - mean
+    - standard_deviation
+    - min_max
+    - modal
+  decimal_places: 3
+  # Fraction of ROI pixels where red/green ratio exceeds this to count as kelp
+  kelp_coverage_threshold: 1.05
+
+# -- Time points ----------------------------------------------
+# Add one block per session. The pipeline will:
+#   1. Find the date folder in images_dir matching the label
+#   2. Auto-detect calibration_DDMMYY.jpg and extract mean gray values
+#   3. Generate calibration .txt files and macro automatically
+#   4. Process all sample photos in that folder
+#
+# To add a new time point, copy the block below and update:
+#   - label: must match the date folder name exactly (DD.MM.YYYY)
+#   - date_short: same date in DDMMYY format (used in filenames)
+#
+# You do NOT need to fill in mean_values manually — the pipeline
+# extracts these automatically from the calibration photo.
+
+time_points:
+  - label: "10.03.2026"
+    date_short: "100326"
+    roi_map: "ROI_Map_100326.zip"
+  - label: "17.03.2026"
+    date_short: "170326"
+    roi_map: "ROI_Map_170326.zip"
+  - label: "27.03.2026"
+    date_short: "270326"
+    roi_map: "ROI_Map_270326.zip"
+  # -- Add new time points below this line --------------------
+  # - label: 17.03.2026
+  #   date_short: 170326

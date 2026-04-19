@@ -1,0 +1,329 @@
+# =============================================================================
+# Kelp GWAS Pipeline Configuration File
+# =============================================================================
+#
+# This file contains all parameters for the GWAS analysis pipeline.
+# Modify values as needed for your specific analysis.
+#
+# Author: GWAS Pipeline
+# Date: 2026-01-26
+
+# =============================================================================
+# INPUT FILES
+# =============================================================================
+
+input:
+  # Directory containing paired-end FASTQ files
+  fastq_dir: "raw_data/"
+
+  # Reference genome (FASTA format)
+  reference_genome: "reference/Macpyr2_genomic.fasta"
+
+  # Gene annotation (GFF format)
+  annotation: "reference/Macpyr2_annotation.gff"
+
+  # Phenotype data (CSV format)
+  # Required columns: kelp_id, survival, population
+  # Optional columns: initial_size_cm, tank_id, week_died
+  phenotypes: "data/phenotypes.csv"
+
+# =============================================================================
+# OUTPUT DIRECTORIES
+# =============================================================================
+
+output:
+  # Main output directory
+  base_dir: "gwas_output/"
+
+  # Subdirectories (will be created automatically)
+  qc: "01_qc/"
+  alignment: "02_alignment/"
+  variants: "03_variant_calling/"
+  filtering: "04_filtering/"
+  population: "05_population_structure/"
+  gwas: "06_gwas_results/"
+  figures: "07_figures/"
+  annotation: "08_annotation/"
+  prediction: "09_genomic_prediction/"
+
+# =============================================================================
+# COMPUTATIONAL RESOURCES
+# =============================================================================
+
+resources:
+  # Number of threads for multi-threaded operations
+  threads: 8
+
+  # Number of samples to process in parallel
+  parallel_samples: 4
+
+  # Memory limit (GB) - used for checking available resources
+  memory_gb: 64
+
+# =============================================================================
+# QUALITY CONTROL PARAMETERS
+# =============================================================================
+
+qc:
+  # Minimum Phred quality score
+  min_quality: 20
+
+  # Minimum read length after trimming (bp)
+  min_length: 50
+
+  # Minimum mapping rate (%)
+  min_mapping_rate: 80
+
+  # Minimum mean coverage depth
+  min_depth: 4
+
+  # Maximum mean coverage depth (to avoid duplicated regions)
+  max_depth: 100
+
+# =============================================================================
+# VARIANT CALLING PARAMETERS
+# =============================================================================
+
+variant_calling:
+  # GATK path (or 'gatk' if in PATH)
+  gatk_path: "gatk"
+
+  # Ploidy level (2 for diploid kelp sporophytes)
+  ploidy: 2
+
+  # Hard filter thresholds
+  filters:
+    QD_min: 2.0
+    FS_max: 60.0
+    MQ_min: 40.0
+    SOR_max: 3.0
+    MQRankSum_min: -12.5
+    ReadPosRankSum_min: -8.0
+
+# =============================================================================
+# VCF FILTERING PARAMETERS
+# =============================================================================
+
+vcf_filtering:
+  # Minor allele frequency threshold
+  min_maf: 0.05
+
+  # Maximum missing data rate per SNP
+  max_missing: 0.10
+
+  # Hardy-Weinberg equilibrium p-value threshold
+  hwe_pval: 0.000001  # 1e-6
+
+  # Depth filters
+  min_snp_depth: 4
+  max_snp_depth: 20
+
+  # Keep only biallelic SNPs
+  biallelic_only: true
+
+# =============================================================================
+# POPULATION STRUCTURE PARAMETERS
+# =============================================================================
+
+population_structure:
+  # Number of principal components to calculate
+  n_pcs: 10
+
+  # LD pruning parameters
+  ld_threshold: 0.2  # r²
+  ld_window_size: 50000  # bp
+  ld_window_snps: 50
+
+  # Kinship threshold for identifying related individuals
+  kinship_threshold: 0.25
+
+  # Check for population stratification
+  check_stratification: true
+
+# =============================================================================
+# GWAS ANALYSIS PARAMETERS
+# =============================================================================
+
+gwas:
+  # Number of PCs to include as covariates
+  n_pcs: 3
+
+  # Additional covariates (column names from phenotype file)
+  covariates:
+    - initial_size_cm
+    # - tank_id  # Uncomment if needed
+
+  # Significance thresholds
+  bonferroni_alpha: 0.05
+  suggestive_threshold: 0.00001  # 1e-5
+
+  # Use mixed model (accounts for kinship)
+  use_mixed_model: true
+
+  # External tools (optional)
+  use_gemma: false  # Use GEMMA for mixed model GWAS
+  use_plink: true   # Use PLINK for logistic regression
+
+# =============================================================================
+# GENE ANNOTATION PARAMETERS
+# =============================================================================
+
+annotation:
+  # Window size for finding nearby genes (bp)
+  gene_window: 50000
+
+  # Functional categories to test for enrichment
+  functional_categories:
+    - "Heat Shock & Stress Response"
+    - "Photosynthesis"
+    - "Antioxidant Defense"
+    - "Protein Degradation"
+    - "Membrane & Lipid"
+
+# =============================================================================
+# GENOMIC PREDICTION PARAMETERS
+# =============================================================================
+
+genomic_prediction:
+  # Cross-validation parameters
+  n_folds: 5
+  n_iterations: 100
+
+  # Prediction models to test
+  models:
+    - "Ridge Regression"
+    - "Elastic Net"
+    - "Top SNPs Only"
+    - "Weighted by Effect"
+
+  # Selection intensities for breeding scenarios
+  selection_rates:
+    - 0.10  # Top 10%
+    - 0.25  # Top 25%
+
+  # Fraction of top individuals to output as candidates
+  top_candidates_fraction: 0.20
+
+# =============================================================================
+# VISUALIZATION PARAMETERS
+# =============================================================================
+
+visualization:
+  # Figure format
+  formats:
+    - "png"
+    - "pdf"
+
+  # Resolution for PNG files (DPI)
+  dpi: 300
+
+  # Manhattan plot colors (alternating by chromosome)
+  manhattan_colors:
+    - "blue4"
+    - "orange3"
+
+  # Number of top SNPs to highlight
+  n_top_snps: 10
+
+# =============================================================================
+# PIPELINE CONTROL
+# =============================================================================
+
+pipeline:
+  # Steps to run (set to false to skip)
+  run_qc: true
+  run_alignment: true
+  run_variant_calling: true
+  run_filtering: true
+  run_population_structure: true
+  run_gwas: true
+  run_visualization: true
+  run_annotation: true
+  run_genomic_prediction: true
+
+  # Checkpoint system (allows resuming from failures)
+  use_checkpoints: true
+
+  # Clean intermediate files after successful completion
+  clean_intermediate: false
+
+  # Generate HTML report at end
+  generate_report: true
+
+# =============================================================================
+# LOGGING
+# =============================================================================
+
+logging:
+  # Logging level (DEBUG, INFO, WARNING, ERROR)
+  level: "INFO"
+
+  # Save detailed logs
+  detailed_logs: true
+
+  # Log file naming
+  log_prefix: "pipeline"
+
+# =============================================================================
+# ORGANISM-SPECIFIC INFORMATION
+# =============================================================================
+
+organism:
+  name: "Macrocystis pyrifera"
+  common_name: "Giant Kelp"
+  genome_version: "Macpyr2"
+  genome_size_mb: 537
+  n_chromosomes: 35  # scaffolds
+  n_genes: 25919
+  ploidy: 2
+
+# =============================================================================
+# EXPERIMENT-SPECIFIC INFORMATION
+# =============================================================================
+
+experiment:
+  name: "Kelp Heat Stress GWAS"
+  description: "GWAS for heat stress survival in giant kelp"
+
+  # Experimental design
+  sample_size: 500
+  n_populations: 4
+
+  # Treatment conditions
+  treatment:
+    temperature_celsius: 24
+    duration_weeks: 4
+
+  # Phenotype
+  phenotype_name: "survival"
+  phenotype_type: "binary"  # binary or continuous
+
+  # Expected outcomes
+  expected_survival_rate: 0.50
+  expected_significant_snps: "10-50"
+  expected_prediction_auc: "0.70-0.80"
+
+# =============================================================================
+# CONTACT INFORMATION
+# =============================================================================
+
+contact:
+  principal_investigator: "Your Name"
+  email: "your.email@institution.edu"
+  institution: "Your Institution"
+  project_id: "KELP_GWAS_2026"
+
+# =============================================================================
+# NOTES
+# =============================================================================
+
+notes: |
+  Configuration file for kelp heat stress GWAS pipeline.
+
+  Key considerations:
+  - Adjust thread count based on available CPU cores
+  - MAF threshold of 0.05 is appropriate for population-level analysis
+  - Use 3-5 PCs as covariates to control for population structure
+  - Lambda (genomic inflation) should be between 0.95-1.05
+
+  For questions or issues, contact the pipeline maintainer.

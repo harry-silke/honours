@@ -1,0 +1,96 @@
+# =============================================================================
+# Python Dependencies for Kelp GWAS Pipeline
+# =============================================================================
+#
+# Install with: pip install -r requirements.txt
+# or: conda install --file requirements.txt
+#
+# Python version: >= 3.8
+
+# Core scientific computing
+numpy>=1.21.0
+pandas>=1.3.0
+scipy>=1.7.0
+
+# Genomics and bioinformatics
+cyvcf2>=0.30.0
+pysam>=0.19.0
+biopython>=1.79
+
+# Data visualization
+matplotlib>=3.4.0
+seaborn>=0.11.0
+
+# For BED file operations
+pybedtools>=0.9.0
+
+# Statistical analysis
+statsmodels>=0.13.0
+
+# YAML configuration parsing
+pyyaml>=5.4
+
+# Progress bars
+tqdm>=4.62.0
+
+# Command line argument parsing (built-in, but listing for completeness)
+argparse
+
+# Logging (built-in)
+logging
+
+# Optional: For parallel processing
+joblib>=1.1.0
+
+# Optional: For memory-efficient operations
+dask>=2021.10.0
+
+# Optional: Jupyter notebook support (for interactive analysis)
+# jupyter>=1.0.0
+# ipython>=7.28.0
+
+# =============================================================================
+# External Tools Required (not Python packages)
+# =============================================================================
+#
+# These must be installed separately and available in PATH:
+#
+# 1. FastQC (https://www.bioinformatics.babraham.ac.uk/projects/fastqc/)
+#    - Quality control for sequencing data
+#
+# 2. fastp (https://github.com/OpenGene/fastp)
+#    - Fast adapter trimming and quality filtering
+#
+# 3. HISAT2 (http://daehwankimlab.github.io/hisat2/)
+#    - Fast and sensitive alignment program
+#
+# 4. SAMtools (http://www.htslib.org/)
+#    - Tools for manipulating alignment files
+#
+# 5. BCFtools (http://www.htslib.org/)
+#    - Tools for manipulating VCF files
+#
+# 6. GATK (https://gatk.broadinstitute.org/)
+#    - Genome Analysis Toolkit for variant calling
+#
+# 7. PLINK (https://www.cog-genomics.org/plink/2.0/)
+#    - Whole genome association analysis toolset
+#
+# 8. BEDtools (https://bedtools.readthedocs.io/)
+#    - Toolset for genome arithmetic
+#
+# =============================================================================
+# Installation via Conda (Recommended)
+# =============================================================================
+#
+# Create conda environment with all dependencies:
+#
+# conda create -n kelp_gwas python=3.9
+# conda activate kelp_gwas
+# conda install -c bioconda -c conda-forge \\
+#     numpy pandas scipy matplotlib seaborn \\
+#     cyvcf2 pysam biopython pybedtools \\
+#     fastqc fastp hisat2 samtools bcftools gatk4 plink bedtools
+# pip install statsmodels pyyaml tqdm
+#
+# =============================================================================

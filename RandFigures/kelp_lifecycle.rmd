@@ -1,0 +1,194 @@
+# Giant Kelp (Macrocystis pyrifera) Lifecycle Diagram
+# Produces a publication-ready figure using ggplot2 and ggforce
+#
+# Dependencies: ggplot2, ggforce, grid, ggtext
+```{r}
+library(ggplot2)
+library(ggforce)
+library(grid)
+library(ggtext)
+
+# ── Colour palette ────────────────────────────────────────────────────────
+COL_SPORO   <- "#2D6A4F"   # dark green — sporophyte (diploid)
+COL_GAMETO  <- "#74C69D"   # light green — gametophyte (haploid)
+COL_ARROW   <- "#40454A"
+COL_MEIOSIS <- "#D4A017"   # gold — meiosis
+COL_FERTIL  <- "#C1440E"   # rust — fertilisation
+COL_BG      <- "white"
+COL_LABEL   <- "#1B1B1B"
+
+FONT_MAIN   <- "sans"
+SIZE_STAGE  <- 4.2
+SIZE_ANNOT  <- 3.2
+SIZE_PLY    <- 3.0
+
+# ── Stage positions (x, y on a 0–10 grid) ────────────────────────────────
+# Layout clockwise from adult sporophyte at top-centre
+stages <- data.frame(
+  name = c(
+    "Adult Sporophyte\n(2n)",
+    "Unilocular\nSporangia (2n)",
+    "Meiosis",
+    "Zoospores\n(n)",
+    "Female\nGametophyte (n)",
+    "Male\nGametophyte (n)",
+    "Egg (n)",
+    "Sperm (n)",
+    "Fertilisation\n(Zygote, 2n)",
+    "Juvenile\nSporophyte (2n)"
+  ),
+  x = c(5.0, 7.8, 9.0, 8.5, 7.2, 3.8, 6.5, 4.2, 5.0, 5.0),
+  y = c(9.0, 7.5, 6.0, 4.5, 3.0, 3.0, 1.8, 1.8, 1.0, 2.5),
+  phase = c(
+    "sporophyte", "sporophyte", "transition",
+    "gametophyte", "gametophyte", "gametophyte",
+    "gametophyte", "gametophyte", "fertilisation",
+    "sporophyte"
+  ),
+  stringsAsFactors = FALSE
+)
+
+# ── Arrows ────────────────────────────────────────────────────────────────
+arrow_df <- data.frame(
+  from  = c(1,  2,  3,  4,  5,  6,  7,  8,  9, 10),
+  to    = c(2,  3,  4,  5,  7,  8,  9,  9, 10,  1),
+  label = c(
+    "Sorus formation",
+    "Spore mother\ncell differentiation",
+    "Release of\nbiflagellate zoospores",
+    "Settlement &\ngermination",
+    "Oogenesis",
+    "Spermatogenesis",
+    "",
+    "",
+    "Embryo\ndevelopment",
+    "Growth &\nmaturation"
+  ),
+  lx = c(7.1, 8.8, 9.2, 8.3, 7.4, 3.1, 6.2, 4.5, 5.6, 3.4),
+  ly = c(8.5, 6.8, 5.2, 3.7, 2.2, 2.2, 1.3, 1.3, 1.6, 5.8),
+  stringsAsFactors = FALSE
+)
+
+segs <- data.frame(
+  x     = stages$x[arrow_df$from],
+  y     = stages$y[arrow_df$from],
+  xend  = stages$x[arrow_df$to],
+  yend  = stages$y[arrow_df$to],
+  label = arrow_df$label,
+  lx    = arrow_df$lx,
+  ly    = arrow_df$ly
+)
+
+# ── Plot ──────────────────────────────────────────────────────────────────
+p <- ggplot() +
+
+  # Ploidy phase shading
+  annotate("rect", xmin = 0, xmax = 10.5, ymin = 6.2, ymax = 10.5,
+           fill = COL_SPORO, alpha = 0.06) +
+  annotate("rect", xmin = 0, xmax = 10.5, ymin = 0,   ymax = 6.2,
+           fill = COL_GAMETO, alpha = 0.06) +
+  annotate("segment", x = 0, xend = 10.5, y = 6.2, yend = 6.2,
+           linetype = "dashed", colour = "#AAAAAA", linewidth = 0.5) +
+
+  # Phase labels
+  annotate("text", x = 0.3, y = 9.9, label = "DIPLOID (2n)",
+           colour = COL_SPORO, fontface = "bold", size = 3.8,
+           hjust = 0, family = FONT_MAIN) +
+  annotate("text", x = 0.3, y = 9.5, label = "Sporophyte Phase",
+           colour = COL_SPORO, size = 3.2, hjust = 0, family = FONT_MAIN) +
+  annotate("text", x = 0.3, y = 5.9, label = "HAPLOID (n)",
+           colour = "#1E7A4A", fontface = "bold", size = 3.8,
+           hjust = 0, family = FONT_MAIN) +
+  annotate("text", x = 0.3, y = 5.5, label = "Gametophyte Phase",
+           colour = "#1E7A4A", size = 3.2, hjust = 0, family = FONT_MAIN) +
+
+  # Arrows
+  geom_segment(
+    data = segs,
+    aes(x = x, y = y, xend = xend, yend = yend),
+    arrow = arrow(length = unit(0.22, "cm"), type = "closed"),
+    colour = COL_ARROW, linewidth = 0.55, alpha = 0.75
+  ) +
+
+  # Arrow labels
+  geom_text(
+    data = segs[segs$label != "", ],
+    aes(x = lx, y = ly, label = label),
+    size = 2.8, colour = "#555555",
+    family = FONT_MAIN, lineheight = 0.88
+  ) +
+
+  # Stage node circles
+  ggforce::geom_circle(
+    data = stages,
+    aes(x0 = x, y0 = y, r = 0.6, fill = phase),
+    colour = "white", linewidth = 0.9
+  ) +
+
+  # Stage node labels
+  geom_text(
+    data = stages,
+    aes(x = x, y = y, label = name),
+    size = 2.9, fontface = "bold",
+    colour = "white", family = FONT_MAIN,
+    lineheight = 0.85
+  ) +
+
+  # Key event callout badges
+  annotate("label", x = 9.4, y = 6.05, label = "MEIOSIS",
+           fill = COL_MEIOSIS, colour = "white", fontface = "bold",
+           size = 3.0, label.size = NA, label.padding = unit(0.25, "lines"),
+           family = FONT_MAIN) +
+  annotate("label", x = 5.0, y = 0.45, label = "FERTILISATION",
+           fill = COL_FERTIL, colour = "white", fontface = "bold",
+           size = 3.0, label.size = NA, label.padding = unit(0.25, "lines"),
+           family = FONT_MAIN) +
+
+  # Title
+  annotate("text", x = 5.25, y = 10.25,
+           label = "Macrocystis pyrifera \u2014 Life Cycle",
+           size = 5.2, fontface = "bold.italic", colour = COL_LABEL,
+           family = FONT_MAIN, hjust = 0.5) +
+
+  # Scales and theme
+  scale_fill_manual(values = c(
+    sporophyte    = COL_SPORO,
+    gametophyte   = COL_GAMETO,
+    transition    = COL_MEIOSIS,
+    fertilisation = COL_FERTIL
+  ), guide = "none") +
+
+  coord_fixed(xlim = c(0, 10.5), ylim = c(0, 10.5), expand = FALSE) +
+
+  theme_void(base_family = FONT_MAIN) +
+  theme(
+    plot.background  = element_rect(fill = COL_BG, colour = NA),
+    panel.background = element_rect(fill = COL_BG, colour = NA),
+    plot.margin      = margin(12, 12, 12, 12)
+  )
+
+# ── Save ──────────────────────────────────────────────────────────────────
+# PDF (vector) — preferred for journal submission
+ggsave(
+  filename = "kelp_lifecycle.pdf",
+  plot     = p,
+  width    = 180,   # mm — fits a standard double-column figure
+  height   = 180,
+  units    = "mm",
+  device   = cairo_pdf
+)
+
+# PNG at 300 dpi — for preview or supplementary
+ggsave(
+  filename = "kelp_lifecycle.png",
+  plot     = p,
+  width    = 180,
+  height   = 180,
+  units    = "mm",
+  dpi      = 300
+)
+
+message("Saved: kelp_lifecycle.pdf and kelp_lifecycle.png")
+
+
+```
