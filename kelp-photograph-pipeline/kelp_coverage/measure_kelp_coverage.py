@@ -5,8 +5,15 @@ Measures green-reflectance-based kelp coverage and physical area (cm²)
 from a folder of TIFF images using ROI masks from a single zip file in
 the same folder.
 
-Kelp classifier: R:G > 1.05, excluding pixels where G < 30 (dark/shadow).
-This matches the main pipeline's kelp_coverage metric.
+Photos are grouped by their ID1_ID2_DATE stem (the renaming pipeline names
+them ID1_ID2_DDMMYY_N.tif with N in 2..4) and coverage is averaged across
+the 2-4 photos of each pair. Files without a _N suffix are treated as a
+single-photo group. Groups with an unexpected count (not 2-4) are still
+processed and marked in the flag column. A sample ID of "1000" means the
+lid was unreadable upstream: that side's ROI is dropped for the whole
+group, but the other side is still processed.
+
+Output is one row per pair+date group.
 
 Usage
 -----
@@ -20,7 +27,7 @@ Requirements
 
 Output
 ------
-    Prints per-image results to stdout.
+    Prints per-group results to stdout.
     Writes kelp_coverage_results.csv into the image folder.
 """
 
@@ -28,6 +35,7 @@ import sys
 import zipfile
 import tempfile
 import warnings
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -46,6 +54,12 @@ DARK_CUTOFF   = 30     # exclude pixels where green channel < this value
 # Measured from Calibrite ColorChecker ruler: 30 pixels per mm
 MM_PER_PIXEL  = 1 / 30
 CM2_PER_PIXEL = (MM_PER_PIXEL ** 2) / 100   # mm² -> cm²
+
+# --- Grouping / filename convention ---
+EXPECTED_COUNTS   = (2, 3, 4)   # photos per pair+date; anything else is flagged
+SENTINEL_ID       = "1000"      # unreadable lid; drop that side
+ROI_FOR_LEFT_ID   = "left"      # ROI name for sampleID1 (first id in filename)
+ROI_FOR_RIGHT_ID  = "right"     # ROI name for sampleID2 (second id in filename)
 
 
 def find_roi_zip(folder: Path) -> Path:
@@ -102,37 +116,41 @@ def classify_kelp(r: np.ndarray, g: np.ndarray, mask: np.ndarray):
     return float(kelp.sum() / len(kelp)), float(kelp.sum())
 
 
+def parse_stem(stem: str):
+    """Parse ID1_ID2_DATE[_N] filename stem.
+
+    Returns dict with id1, id2, date, n, pair_key — or None if it doesn't match.
+    A missing _N (old single-photo format) is treated as n=1."""
+    parts = stem.split("_")
+    if len(parts) == 3:
+        id1, id2, date = parts
+        n = 1
+    elif len(parts) == 4 and parts[3].isdigit():
+        id1, id2, date, n_str = parts
+        n = int(n_str)
+    else:
+        return None
+    return {"id1": id1, "id2": id2, "date": date, "n": n,
+            "pair_key": f"{id1}_{id2}_{date}"}
+
+
 def process_image(tif_path: Path, masks: dict) -> dict:
+    """Per-photo result: {roi_name: (coverage, area_cm2)}. NaN if the ROI mask
+    shape doesn't match or the ROI is fully dark."""
     rgb = tifffile.imread(str(tif_path))[0]
     r = rgb[:, :, 0]
     g = rgb[:, :, 1]
     image_shape = r.shape
 
-    coverages = []
-    areas_cm2 = []
-    roi_results = {}
-
+    out = {}
     for roi_name, mask in masks.items():
         if mask.shape != image_shape:
-            roi_results[f"coverage_{roi_name}"] = np.nan
-            roi_results[f"area_cm2_{roi_name}"] = np.nan
+            out[roi_name] = (np.nan, np.nan)
             continue
         cov, kelp_px = classify_kelp(r, g, mask)
         area = kelp_px * CM2_PER_PIXEL if not np.isnan(kelp_px) else np.nan
-        roi_results[f"coverage_{roi_name}"] = cov
-        roi_results[f"area_cm2_{roi_name}"] = area
-        if not np.isnan(cov):
-            coverages.append(cov)
-        if not np.isnan(area):
-            areas_cm2.append(area)
-
-    row = {
-        "filename":      tif_path.name,
-        "mean_coverage": float(np.nanmean(coverages)) if coverages else np.nan,
-        "mean_area_cm2": float(np.nanmean(areas_cm2)) if areas_cm2 else np.nan,
-    }
-    row.update(roi_results)
-    return row
+        out[roi_name] = (cov, area)
+    return out
 
 
 def main():
@@ -164,28 +182,108 @@ def main():
     del img0
 
     masks = load_roi_masks(roi_zip, image_shape)
-    print(f"ROIs loaded: {list(masks.keys())}")
+    roi_names = list(masks.keys())
+    print(f"ROIs loaded: {roi_names}")
     print()
 
-    rows = []
+    # Stage 1: process every photo, bucket results by pair_key
+    groups = defaultdict(list)   # pair_key -> list of dicts {n, filename, rois}
+    unparseable = []
+    errors = []
     for tif in tqdm(tif_files, desc="Processing"):
+        parsed = parse_stem(tif.stem)
+        if parsed is None:
+            unparseable.append(tif.name)
+            continue
         try:
-            row = process_image(tif, masks)
+            rois = process_image(tif, masks)
         except Exception as e:
-            row = {"filename": tif.name, "mean_coverage": np.nan,
-                   "mean_area_cm2": np.nan, "error": str(e)}
+            errors.append((tif.name, str(e)))
+            rois = {name: (np.nan, np.nan) for name in roi_names}
+        groups[parsed["pair_key"]].append({
+            "n": parsed["n"], "filename": tif.name, "rois": rois,
+            "id1": parsed["id1"], "id2": parsed["id2"], "date": parsed["date"],
+        })
+
+    if unparseable:
+        print(f"\nWARNING: {len(unparseable)} file(s) did not match "
+              f"ID1_ID2_DATE[_N]:")
+        for name in unparseable:
+            print(f"  {name}")
+    if errors:
+        print(f"\nWARNING: {len(errors)} file(s) errored during processing:")
+        for name, err in errors:
+            print(f"  {name}: {err}")
+
+    # Stage 2: average across photos within each group
+    rows = []
+    for pair_key in sorted(groups.keys()):
+        photos = sorted(groups[pair_key], key=lambda d: d["n"])
+        n_photos = len(photos)
+        id1, id2, date = photos[0]["id1"], photos[0]["id2"], photos[0]["date"]
+
+        drop = set()
+        if id1 == SENTINEL_ID:
+            drop.add(ROI_FOR_LEFT_ID)
+        if id2 == SENTINEL_ID:
+            drop.add(ROI_FOR_RIGHT_ID)
+
+        flags = []
+        if n_photos not in EXPECTED_COUNTS:
+            flags.append(f"unexpected_count:{n_photos}")
+        if drop:
+            flags.append("sentinel_dropped:" + ",".join(sorted(drop)))
+        flag = ";".join(flags) if flags else "ok"
+
+        row = {
+            "pair_key": pair_key,
+            "id1": id1, "id2": id2, "date": date,
+            "n_photos": n_photos,
+            "flag": flag,
+        }
+
+        roi_cov, roi_area = {}, {}
+        for name in roi_names:
+            if name in drop:
+                roi_cov[name]  = np.nan
+                roi_area[name] = np.nan
+            else:
+                covs  = [p["rois"][name][0] for p in photos
+                         if not np.isnan(p["rois"][name][0])]
+                areas = [p["rois"][name][1] for p in photos
+                         if not np.isnan(p["rois"][name][1])]
+                roi_cov[name]  = float(np.mean(covs))  if covs  else np.nan
+                roi_area[name] = float(np.mean(areas)) if areas else np.nan
+            row[f"coverage_{name}"] = roi_cov[name]
+            row[f"area_cm2_{name}"] = roi_area[name]
+
+        # Mean across the (non-dropped) ROIs — i.e. across the two samples
+        # in the pair. NaNs are skipped.
+        cov_vals  = [v for v in roi_cov.values()  if not np.isnan(v)]
+        area_vals = [v for v in roi_area.values() if not np.isnan(v)]
+        row["mean_coverage"] = float(np.mean(cov_vals))  if cov_vals  else np.nan
+        row["mean_area_cm2"] = float(np.mean(area_vals)) if area_vals else np.nan
+
         rows.append(row)
 
     df = pd.DataFrame(rows)
+    # Tidy column order
+    front = ["pair_key", "id1", "id2", "date", "n_photos", "flag",
+             "mean_coverage", "mean_area_cm2"]
+    rest = [c for c in df.columns if c not in front]
+    df = df[front + rest]
 
-    print("\nPer-image results:")
-    print(df[["filename", "mean_coverage", "mean_area_cm2"]].to_string(index=False))
+    print("\nPer-group results:")
+    print(df[front].to_string(index=False))
 
     folder_mean_cov  = df["mean_coverage"].mean()
     folder_mean_area = df["mean_area_cm2"].mean()
     folder_std_area  = df["mean_area_cm2"].std()
-    print(f"\nFolder average kelp coverage: {folder_mean_cov*100:.2f}%")
-    print(f"Folder average kelp area:     {folder_mean_area:.4f} cm2  (SD {folder_std_area:.4f})")
+    print(f"\nGroups: {len(df)}  "
+          f"(flagged: {(df['flag'] != 'ok').sum()})")
+    print(f"Folder average kelp coverage: {folder_mean_cov*100:.2f}%")
+    print(f"Folder average kelp area:     {folder_mean_area:.4f} cm2  "
+          f"(SD {folder_std_area:.4f})")
 
     out_csv = folder / "kelp_coverage_results.csv"
     df.to_csv(out_csv, index=False)
