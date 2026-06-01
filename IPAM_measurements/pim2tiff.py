@@ -93,22 +93,65 @@ def convert(path: Path, outdir: Path, split: bool, marker_len: int):
 def main():
     ap = argparse.ArgumentParser(description="Walz .PIM -> multiframe TIFF (headless).")
     ap.add_argument("inputs", nargs="+", help="one or more .pim files or a folder")
-    ap.add_argument("-o", "--outdir", type=Path, required=True)
+    ap.add_argument("-o", "--outdir", type=Path, default=None,
+                    help="output folder. If omitted, output goes beside the input "
+                         "(a folder of .pim files -> <folder>-tif).")
+    ap.add_argument("--each", action="store_true",
+                    help="treat each immediate SUBFOLDER of the input as its own "
+                         "experiment, writing each to <subfolder>-tif. Use this on a "
+                         "parent folder containing dated subfolders.")
     ap.add_argument("--split", action="store_true", help="also write per-frame TIFFs")
     ap.add_argument("--marker", type=int, default=MARKER_LEN,
                     help=f"induction-marker length in bytes (default {MARKER_LEN})")
     a = ap.parse_args()
-    files = []
+
+    def run_folder(src: Path, out: Path):
+        """Convert every .pim in one folder into `out`."""
+        pim_files = sorted(src.glob("*.pim")) + sorted(src.glob("*.PIM"))
+        if not pim_files:
+            print(f"(skip) no .pim files in {src}", file=sys.stderr)
+            return
+        for f in pim_files:
+            try:
+                convert(f, out, a.split, a.marker)
+            except Exception as e:
+                print(f"FAILED {f.name}: {e}", file=sys.stderr)
+
+    if a.each:
+        # Each input is a PARENT folder; process each child subfolder separately.
+        for it in a.inputs:
+            parent = Path(it)
+            if not parent.is_dir():
+                print(f"(skip) --each needs a folder, not {parent}", file=sys.stderr)
+                continue
+            subfolders = sorted(p for p in parent.iterdir() if p.is_dir())
+            if not subfolders:
+                print(f"(skip) no subfolders in {parent}", file=sys.stderr)
+                continue
+            for sub in subfolders:
+                # output beside the originals, or under -o if one was given
+                base = a.outdir if a.outdir else parent
+                out = base / f"{sub.name}-tif"
+                run_folder(sub, out)
+        return
+
+    # Default mode: loose files and/or folders of .pim files.
+    loose = []
     for it in a.inputs:
         p = Path(it)
-        files += (sorted(p.glob("*.pim")) + sorted(p.glob("*.PIM"))) if p.is_dir() else [p]
-    if not files:
-        sys.exit("no .pim files found")
-    for f in files:
-        try:
-            convert(f, a.outdir, a.split, a.marker)
-        except Exception as e:
-            print(f"FAILED {f.name}: {e}", file=sys.stderr)
+        if p.is_dir():
+            out = a.outdir if a.outdir else p.parent / f"{p.name}-tif"
+            run_folder(p, out)
+        else:
+            loose.append(p)
+    if loose:
+        if a.outdir is None:
+            sys.exit("loose .pim files given but no -o output folder specified")
+        for f in loose:
+            try:
+                convert(f, a.outdir, a.split, a.marker)
+            except Exception as e:
+                print(f"FAILED {f.name}: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
