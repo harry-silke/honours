@@ -69,14 +69,21 @@ def convert(p):
     p["jpeg"].mkdir(exist_ok=True)
     p["tiff"].mkdir(exist_ok=True)
 
-    raws = sorted(p["raw"].glob(RAW_GLOB))
+    raws = [f for f in sorted(p["raw"].glob(RAW_GLOB))
+            if not f.name.startswith("._")]   # skip macOS AppleDouble sidecars
     if not raws:
         sys.exit(f"No files matching {RAW_GLOB} in {p['raw']}/. "
                  "On Linux the glob is case-sensitive: check .arw vs .ARW.")
 
+    converted = 0
     for raw_path in raws:
-        with rawpy.imread(str(raw_path)) as raw:
-            rgb = raw.postprocess(use_camera_wb=True)  # 8-bit RGB
+        try:
+            with rawpy.imread(str(raw_path)) as raw:
+                rgb = raw.postprocess(use_camera_wb=True)  # 8-bit RGB
+        except Exception as e:
+            # one unreadable file shouldn't kill the whole run
+            print(f"SKIP {raw_path.name}: {e}")
+            continue
         stem = raw_path.stem
 
         # full-size TIFF: this is the real data
@@ -95,9 +102,10 @@ def convert(p):
             pass
         img.save(p["jpeg"] / f"{stem}.jpg", format="JPEG",
                  quality=85, exif=exif)
+        converted += 1
         print(f"converted {stem}")
 
-    print(f"\nDone. {len(raws)} raws -> {p['jpeg']}/ and {p['tiff']}/")
+    print(f"\nDone. {converted} of {len(raws)} raws -> {p['jpeg']}/ and {p['tiff']}/")
 
 
 # ----------------------------------------------------------------------
@@ -215,7 +223,8 @@ def extract(p, batch_size=25):
         with open(p["csv"]) as f:
             done = {row["old_stem"] for row in csv.DictReader(f)}
 
-    all_jpgs = sorted(p["jpeg"].glob("*.jpg"))
+    all_jpgs = [j for j in sorted(p["jpeg"].glob("*.jpg"))
+                if not j.name.startswith("._")]   # skip macOS AppleDouble sidecars
     todo = [j for j in all_jpgs if j.stem not in done]
     if not todo:
         print(f"All {len(all_jpgs)} photos already in {p['csv'].name}. Nothing to do.")
