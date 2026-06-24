@@ -1,0 +1,62 @@
+---
+title: "HOBO Logger Temperature Data"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(ggplot2)
+library(dplyr)
+```
+
+```{r load}
+df <- read.csv("HONS_GKHE_hobo_logger_data.csv")
+df$date_time <- as.POSIXct(df$date_time, format = "%m/%d/%Y %H:%M:%S")
+```
+
+## Temperature over time
+
+All three treatments plotted together.
+
+```{r temp-plot, fig.width=10, fig.height=5}
+ggplot(df, aes(x = date_time, y = temperature_celsius, colour = treatment)) +
+  geom_point(alpha = 0.3, size = 0.8) +
+  labs(x = "Date", y = "Temperature (°C)", colour = "Treatment") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+## Temperature by treatment (faceted)
+
+```{r temp-facet, fig.width=10, fig.height=7}
+ggplot(df, aes(x = date_time, y = temperature_celsius, colour = treatment)) +
+  geom_point(alpha = 0.3, size = 0.6) +
+  facet_wrap(~treatment, ncol = 1) +
+  labs(x = "Date", y = "Temperature (°C)") +
+  theme_bw() +
+  theme(legend.position = "none")
+```
+
+## Light over time
+
+```{r light-plot, fig.width=10, fig.height=5}
+ggplot(df, aes(x = date_time, y = light_lux, colour = treatment)) +
+  geom_point(alpha = 0.3, size = 0.8) +
+  labs(x = "Date", y = "Light (lux)", colour = "Treatment") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+## Summary statistics
+
+```{r summary}
+df %>%
+  group_by(treatment) %>%
+  summarise(
+    n = n(),
+    mean_temp = round(mean(temperature_celsius, na.rm = TRUE), 2),
+    sd_temp   = round(sd(temperature_celsius, na.rm = TRUE), 2),
+    min_temp  = round(min(temperature_celsius, na.rm = TRUE), 2),
+    max_temp  = round(max(temperature_celsius, na.rm = TRUE), 2)
+  ) |>
+  knitr::kable(col.names = c("Treatment", "N", "Mean °C", "SD", "Min °C", "Max °C"))
+```

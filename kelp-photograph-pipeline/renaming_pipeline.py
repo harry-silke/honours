@@ -111,26 +111,19 @@ def convert(p):
 # ----------------------------------------------------------------------
 # Stage 1: Claude reads both jar IDs, build rename_map.csv
 # ----------------------------------------------------------------------
-PROMPT = """This photo shows petri dishes, each with its clear lid flipped and
-resting ABOVE its own dish. A handwritten label in marker is on each lid. The
-labels are upside down in the original orientation. To help, a second copy of
-the same photo, rotated 180 degrees so the labels read normally, is also provided.
+PROMPT = """Respond with ONLY a JSON object. No preamble, no explanation, no markdown.
 
-Usually there are TWO lids (left and right, as seen in the original upright-photo
-orientation). Sometimes there is only ONE lid.
+The photo shows petri dishes with lids flipped above them. Handwritten labels in marker are on the lids. The second image is the same photo rotated 180 degrees so the labels are upright.
 
-Each label is a number, sometimes followed by a single letter (the treatment),
-for example: 127, 127B, 127C. Read the FULL label including any trailing letter.
-Do not drop the letter. Do not add a letter that is not written.
+Usually there are two lids (left and right as seen in the original orientation). Sometimes only one.
 
-Return ONLY a JSON object, no other text:
-{"left": "<full label on left lid>", "right": "<full label on right lid>"}
+Each label is a number, sometimes with a trailing letter (e.g. 127, 127B). Read the full label including any letter. Do not drop a letter. Do not add one that is not written.
 
-Rules:
-- Two lids present: left label in "left", right label in "right".
-- Only ONE lid present: put its label in "left" and use "1000" for "right".
-- A label is present but genuinely unreadable: use "1000" for that side.
-Never use null. Use the string "1000" for any missing or unreadable side."""
+{"left": "<full label>", "right": "<full label>"}
+
+If only one lid: label in "left", "1000" in "right".
+If a label is present but unreadable: "1000" for that side.
+Never use null."""
 
 
 def _exif_datetime(path):

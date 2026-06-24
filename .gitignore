@@ -3,3 +3,4 @@ results/
 *.png
 *.nc
 *.tif
+.DS_Store
