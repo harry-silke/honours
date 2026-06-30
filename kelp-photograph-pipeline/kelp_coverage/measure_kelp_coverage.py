@@ -2,15 +2,21 @@
 measure_kelp_coverage.py
 ------------------------
 Measures green-reflectance-based kelp coverage and physical area (cm²)
-from a folder of TIFF images using ROI masks from a single zip file in
-the same folder.
+from a folder of TIFF images using ROI masks from a single zip file.
+
+You can point the script either directly at a folder of TIFFs, or at a
+shoot folder whose layout is `<shoot>/tiffs/` (as produced by
+renaming_pipeline.py) — in the latter case the TIFFs are auto-discovered
+and the output CSV is written to the shoot folder. The ROI zip is
+searched for in the TIFFs folder first, then in its parent.
 
 Photos are grouped by their ID1_ID2_DATE stem (the renaming pipeline names
-them ID1_ID2_DDMMYY_N.tif with N in 2..4) and coverage is averaged across
-the 2-4 photos of each pair. Files without a _N suffix are treated as a
-single-photo group. Groups with an unexpected count (not 2-4) are still
-processed and marked in the flag column. A sample ID of "1000" means the
-lid was unreadable upstream: that side's ROI is dropped for the whole
+them ID1_ID2_YYYYMMDD_N.tif with N in 2..4) and coverage is averaged across
+the 2-4 photos of each pair. The date field is treated as an opaque string,
+so older DDMMYY filenames still work. Files without a _N suffix are treated
+as a single-photo group. Groups with an unexpected count (not 2-4) are
+still processed and marked in the flag column. A sample ID of "1000" means
+the lid was unreadable upstream: that side's ROI is dropped for the whole
 group, but the other side is still processed.
 
 Output is one row per pair+date group.
@@ -62,16 +68,46 @@ ROI_FOR_LEFT_ID   = "left"      # ROI name for sampleID1 (first id in filename)
 ROI_FOR_RIGHT_ID  = "right"     # ROI name for sampleID2 (second id in filename)
 
 
-def find_roi_zip(folder: Path) -> Path:
-    zips = list(folder.glob("*.zip"))
-    if len(zips) == 0:
-        raise FileNotFoundError(f"No zip file found in {folder}")
-    if len(zips) > 1:
-        raise ValueError(
-            f"Multiple zip files found in {folder}: {[z.name for z in zips]}\n"
-            "Place exactly one ROI zip in the folder."
-        )
-    return zips[0]
+def list_tifs(folder: Path):
+    files = (sorted(folder.glob("*.tif"))  + sorted(folder.glob("*.TIF"))
+           + sorted(folder.glob("*.tiff")) + sorted(folder.glob("*.TIFF")))
+    return [f for f in files if not f.name.startswith("._")]
+
+
+def find_tiffs_folder(folder: Path) -> Path:
+    """Locate the folder that actually contains the TIFFs.
+
+    If `folder` has TIFFs directly, returns it. Otherwise looks for a
+    `tiffs/` (or TIFFs/TIFFS/Tiffs) subfolder one level down. Errors out
+    if nothing matches.
+    """
+    if list_tifs(folder):
+        return folder
+    for name in ("tiffs", "TIFFs", "TIFFS", "Tiffs"):
+        sub = folder / name
+        if sub.is_dir() and list_tifs(sub):
+            return sub
+    sys.exit(f"No TIFFs in {folder} and no 'tiffs/' subfolder with TIFFs.")
+
+
+def find_roi_zip(tiffs_folder: Path) -> Path:
+    """Look for the ROI zip in the TIFFs folder first, then its parent."""
+    searched = []
+    for folder in (tiffs_folder, tiffs_folder.parent):
+        if folder in searched:
+            continue
+        searched.append(folder)
+        zips = [f for f in folder.glob("*.zip") if not f.name.startswith("._")]
+        if len(zips) == 1:
+            return zips[0]
+        if len(zips) > 1:
+            raise ValueError(
+                f"Multiple zip files in {folder}: {[z.name for z in zips]}\n"
+                "Place exactly one ROI zip in the folder."
+            )
+    raise FileNotFoundError(
+        f"No ROI zip found in {tiffs_folder} or {tiffs_folder.parent}"
+    )
 
 
 def load_roi_masks(roi_zip: Path, image_shape: tuple) -> dict:
@@ -158,20 +194,22 @@ def main():
         print("Usage: python measure_kelp_coverage.py <folder>")
         sys.exit(1)
 
-    folder = Path(sys.argv[1]).resolve()
-    if not folder.is_dir():
-        print(f"Not a directory: {folder}")
+    target = Path(sys.argv[1]).resolve()
+    if not target.is_dir():
+        print(f"Not a directory: {target}")
         sys.exit(1)
 
-    tif_files = (sorted(folder.glob("*.tif"))  + sorted(folder.glob("*.TIF"))
-               + sorted(folder.glob("*.tiff")) + sorted(folder.glob("*.TIFF")))
+    folder = find_tiffs_folder(target)
+    tif_files = list_tifs(folder)
     if not tif_files:
         print(f"No TIFF files found in {folder}")
         sys.exit(1)
 
     roi_zip = find_roi_zip(folder)
-    print(f"Folder:      {folder}")
-    print(f"ROI zip:     {roi_zip.name}")
+    print(f"Target:      {target}")
+    if folder != target:
+        print(f"TIFFs:       {folder}")
+    print(f"ROI zip:     {roi_zip}")
     print(f"Images:      {len(tif_files)}")
     print(f"Calibration: {1/MM_PER_PIXEL:.0f} px/mm  ({CM2_PER_PIXEL*1e6:.4f} mm^2/px)")
     print()
@@ -285,7 +323,7 @@ def main():
     print(f"Folder average kelp area:     {folder_mean_area:.4f} cm2  "
           f"(SD {folder_std_area:.4f})")
 
-    out_csv = folder / "kelp_coverage_results.csv"
+    out_csv = target / "kelp_coverage_results.csv"
     df.to_csv(out_csv, index=False)
     print(f"\nResults saved to: {out_csv}")
 
