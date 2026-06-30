@@ -44,14 +44,30 @@ MODEL = "claude-sonnet-4-5"  # check current docs before a big run
 
 
 def resolve_paths(raw_arg):
-    """Given the raws folder, derive jpegs/, tiffs/ and the CSV beside it."""
-    raw_dir = Path(raw_arg).expanduser().resolve() if raw_arg else Path("raws").resolve()
-    base = raw_dir.parent
+    given = Path(raw_arg).expanduser().resolve() if raw_arg else Path("raws").resolve()
+    if given.name == "tiffs":
+        base = given.parent
+        tiff_dir = given
+        raw_dir = base / "raws"
+    else:
+        raw_dir = given
+        base = given.parent
+        tiff_dir = base / "tiffs"
+
+    # Try to parse a date from the shoot folder name (e.g. 29-05-2026)
+    folder_date = ""
+    try:
+        from datetime import datetime
+        folder_date = datetime.strptime(base.name, "%d-%m-%Y").strftime("%Y%m%d")
+    except ValueError:
+        pass
+
     return {
-        "raw": raw_dir,
-        "jpeg": base / "jpegs",
-        "tiff": base / "tiffs",
-        "csv": base / "rename_map.csv",
+        "raw":         raw_dir,
+        "jpeg":        base / "jpegs",
+        "tiff":        tiff_dir,
+        "csv":         base / "rename_map.csv",
+        "folder_date": folder_date,
     }
 
 
@@ -160,7 +176,7 @@ def _jpeg_views_under_limit(path, max_bytes=5_000_000):
 CSV_FIELDS = ["old_stem", "left", "right", "date", "dt"]
 
 
-def _read_one(client, jpg, raw_dir):
+def _read_one(client, jpg, raw_dir, p):
     """Send one photo (plus its rotated copy) to Claude, return a result dict."""
     original_b64, rotated_b64 = _jpeg_views_under_limit(jpg)
     msg = client.messages.create(
@@ -196,7 +212,7 @@ def _read_one(client, jpg, raw_dir):
 
     raw_path = raw_dir / f"{jpg.stem}.ARW"
     dt = _exif_datetime(raw_path) if raw_path.exists() else ""
-    date = dt.split()[0].replace(":", "") if dt else ""
+    date = dt.split()[0].replace(":", "") if dt else p.get("folder_date", "")
     return {"old_stem": jpg.stem, "left": left, "right": right,
             "date": date, "dt": dt, "reply": reply}
 
@@ -237,7 +253,7 @@ def extract(p, batch_size=25):
             batch = todo[i:i + batch_size]
             for jpg in batch:
                 try:
-                    r = _read_one(client, jpg, p["raw"])
+                    r = _read_one(client, jpg, p["raw"], p)
                 except Exception as e:
                     # one bad photo shouldn't kill the run; leave it for a re-run
                     print(f"ERROR on {jpg.stem}: {e}  (skipped, re-run to retry)")
