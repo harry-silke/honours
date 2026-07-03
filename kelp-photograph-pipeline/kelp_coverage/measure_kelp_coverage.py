@@ -448,6 +448,7 @@ def process_folder(target: Path, args, shared_roi_zip: Path = None) -> None:
     refl_keys = ["refl_R", "refl_G", "refl_B", "refl_bright", "refl_rg"]
 
     rows = []
+    photo_rows = []
     for pair_key in sorted(groups.keys()):
         photos = sorted(groups[pair_key], key=lambda d: d["n"])
         n_photos = len(photos)
@@ -466,6 +467,31 @@ def process_folder(target: Path, args, shared_roi_zip: Path = None) -> None:
         if drop:
             flags.append("sentinel_dropped:" + ",".join(sorted(drop)))
         flag = ";".join(flags) if flags else "ok"
+
+        # Per-photo, per-side rows (raw, not averaged). Sentinel sides dropped.
+        for p in photos:
+            for roi_name, meas in p["rois"].items():
+                lo = roi_name.lower()
+                if "left" in lo:
+                    side, individual = "left", id1
+                elif "right" in lo:
+                    side, individual = "right", id2
+                else:
+                    continue
+                if side in drop:
+                    continue
+                kelp_px = meas["kelp_px"]
+                area = (kelp_px * CM2_PER_PIXEL
+                        if not np.isnan(kelp_px) else np.nan)
+                photo_rows.append({
+                    "photo_filename": p["filename"], "photo_n": p["n"],
+                    "pair_key": pair_key, "date": date, "side": side,
+                    "roi_name": roi_name, "individual": individual,
+                    "coverage": meas["coverage"], "area_cm2": area,
+                    "refl_R": meas["refl_R"], "refl_G": meas["refl_G"],
+                    "refl_B": meas["refl_B"], "refl_bright": meas["refl_bright"],
+                    "refl_rg": meas["refl_rg"], "flag": flag, "sentinel": False,
+                })
 
         row = {"pair_key": pair_key, "id1": id1, "id2": id2, "date": date,
                "n_photos": n_photos, "flag": flag,
@@ -532,6 +558,15 @@ def process_folder(target: Path, args, shared_roi_zip: Path = None) -> None:
     out_csv = target / "kelp_coverage_results.csv"
     df.to_csv(out_csv, index=False)
     print(f"\nResults saved to: {out_csv}")
+
+    photo_cols = ["photo_filename", "photo_n", "pair_key", "date", "side",
+                  "roi_name", "individual", "coverage", "area_cm2",
+                  "refl_R", "refl_G", "refl_B", "refl_bright", "refl_rg",
+                  "flag", "sentinel"]
+    pdf = pd.DataFrame(photo_rows, columns=photo_cols)
+    photo_csv = target / "kelp_photo_results.csv"
+    pdf.to_csv(photo_csv, index=False)
+    print(f"Per-photo results saved to: {photo_csv}  ({len(pdf)} rows)")
 
 
 def main():

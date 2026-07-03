@@ -74,8 +74,8 @@ def main():
     dates = sorted(combined["date"].dropna().unique())
     print(f"Dates: {', '.join(map(str, dates))}")
     if dates and not re.match(r"^\d{1,2}\.\d{1,2}\.\d{4}$", str(dates[0])):
-        print("WARNING: dates are not DD.MM.YYYY. analyse_kelp.R uses dmy(); "
-              "if these are YYYYMMDD, change dmy() to ymd() in the R script.")
+        print("WARNING: dates are not DD.MM.YYYY. analyse_kelp.R uses ymd(); "
+              "if these are YYYYMMDD, change ymd() to dmy() in the R script.")
 
 
 if __name__ == "__main__":
