@@ -1,0 +1,62 @@
+{
+  "R": {
+    "dn": [
+      13.08,
+      25.92,
+      42.68,
+      69.3,
+      95.83,
+      129.16
+    ],
+    "ref": [
+      3.18,
+      9.36,
+      19.24,
+      37.21,
+      60.42,
+      92.42
+    ]
+  },
+  "G": {
+    "dn": [
+      4.83,
+      25.9,
+      44.16,
+      72.52,
+      100.23,
+      133.65
+    ],
+    "ref": [
+      3.18,
+      9.36,
+      19.24,
+      37.21,
+      60.42,
+      92.42
+    ]
+  },
+  "B": {
+    "dn": [
+      12.28,
+      28.6,
+      46.96,
+      76.4,
+      104.65,
+      136.23
+    ],
+    "ref": [
+      3.18,
+      9.36,
+      19.24,
+      37.21,
+      60.42,
+      92.42
+    ]
+  },
+  "note": "Measured DN (col1) vs set reference (col2) from Fiji on the calibration scale photo. Applied by interpolation to reflectance outputs only; coverage stays on raw DN.",
+  "sources": {
+    "R": "270326_calibration_red.txt",
+    "G": "270326_calibration_green.txt",
+    "B": "270326_calibration_blue.txt"
+  }
+}

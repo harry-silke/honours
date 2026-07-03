@@ -48,16 +48,15 @@ Pipeline location: /Users/harrysilke/desktop/OneDrive/Honours/kelp-pipeline/
 ├── scripts/
 │   ├── generate_macros.py      # Stage 1: config → ImageJ macro generator
 │   ├── register_images.py      # Stage 2: OpenCV image registration / ROI alignment
-│   ├── run_imagej.py           # Stage 3: headless ImageJ batch runner
-│   ├── aggregate_results.py    # Stage 4: CSV consolidation → analysis-ready dataframe
-│   └── run_pipeline.py         # Master runner: triggers all 4 stages in sequence
+│   ├── run_imagej.py           # Stage 3: direct TIF measurement + per-group aggregation
+│   └── run_pipeline.py         # Master runner
 ├── macros/                     # Auto-generated .ijm files — never edit manually
 ├── calibrations/               # ImageJ calibration .txt files (auto-generated)
 ├── roi_maps/
 │   └── ROI_Map.zip             # ONE map, used for every time point forever
 └── results/
-    ├── raw/                    # Per-image per-channel CSVs from ImageJ
-    └── aggregated_TIMESTAMP.csv  # Final clean output
+    ├── raw/                    # Per-timepoint CSVs: <label>_results.csv
+    └── master_results.csv      # Concatenation of all per-timepoint CSVs
 ```
 
 ## ROI Map
@@ -94,22 +93,30 @@ Pipeline location: /Users/harrysilke/desktop/OneDrive/Honours/kelp-pipeline/
 4. Clean aggregated CSV is ready for R/Python analysis
 
 ## Output Data Structure
-One row per sample per channel per time point:
+One row per pair group (ID1_ID2_DATE), averaged across the 2–4 photos of
+that pair. Columns:
 
-| filename | roi | sample_id | date | channel | mean_reflectance | std_dev | area |
-|---|---|---|---|---|---|---|---|
-| C1_C2_100226.jpg | left | C1 | 100226 | red | 47.3 | 8.2 | 1250 |
-| C1_C2_100226.jpg | right | C2 | 100226 | red | 39.1 | 7.4 | 1250 |
+| Block | Columns |
+|---|---|
+| Identifiers | `pair_key`, `id1`, `id2`, `date`, `n_photos`, `flag` |
+| Calibrated stats | `{side}_{channel}_{stat}` — side ∈ left/right, channel ∈ red/green/blue, stat ∈ mean/stddev/min/modal |
+| Kelp coverage | `left_kelp_coverage`, `right_kelp_coverage` |
+| Kelp reflectance | `{side}_kelp_mean_reflectance_{channel}` |
+| Kelp area | `left_kelp_area_cm2`, `right_kelp_area_cm2` |
+
+`flag` is `"ok"` unless the group has an unexpected photo count (e.g.
+`unexpected_count:1`) or contains a sentinel `1000` ID (e.g.
+`sentinel_dropped:right`).
 
 ## Reading Output in R
 ```r
-df <- read.csv("results/aggregated_TIMESTAMP.csv")
+df <- read.csv("results/master_results.csv")
 ```
 
 ## Reading Output in Python
 ```python
 import pandas as pd
-df = pd.read_csv("results/aggregated_TIMESTAMP.csv")
+df = pd.read_csv("results/master_results.csv")
 ```
 
 ## Current Build Status
@@ -118,14 +125,14 @@ df = pd.read_csv("results/aggregated_TIMESTAMP.csv")
 - [x] config.yaml written
 - [x] Stage 1: generate_macros.py — COMPLETE
 - [x] Stage 2: register_images.py — COMPLETE
-- [x] Stage 3: run_imagej.py — COMPLETE
-- [x] Stage 4: aggregate_results.py — COMPLETE
+- [x] Stage 3: run_imagej.py — COMPLETE (also produces master_results.csv)
 - [x] Master runner: run_pipeline.py — COMPLETE
 
 ## Development Notes
 - Always validate calibration files exist before generating macros
 - Registration confidence threshold defined in config.yaml — images below it go to flagged_for_review.txt
-- Filename parser splits on underscore: parts[0]=sampleID1, parts[1]=sampleID2, parts[2]=date
+- Filename parser splits on underscore: parts[0]=sampleID1, parts[1]=sampleID2, parts[2]=date, parts[3]=photo number (optional, 1-4)
 - All paths in generated macros must use forward slashes (ImageJ requirement, even on Mac)
-- The aggregator maps roi label "left" → sampleID1 and "right" → sampleID2 from filename
+- ROI label "left" → sampleID1 and "right" → sampleID2; run_imagej.py applies this when building per-side output columns
 - Date folders use DD.MM.YYYY format — pipeline parses this when scanning for new time points
+- A full `python run_imagej.py` rebuilds master_results.csv from scratch from that run's per-timepoint CSVs. `--timepoint X` updates only that date's rows in the existing master.

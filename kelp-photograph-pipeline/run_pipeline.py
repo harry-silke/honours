@@ -2,15 +2,18 @@
 """
 Master Pipeline Runner
 =======================
-Runs the kelp reflectance pipeline in sequence:
+Runs the kelp reflectance pipeline:
 
-  Stage 1 — run_imagej.py         Measure reflectance (pure Python, no Fiji)
-  Stage 2 — aggregate_results.py  Consolidate CSVs into final dataframe
+  Stage 1 — run_imagej.py  Measure reflectance and kelp coverage, average
+                           over each pair group, and write per-timepoint
+                           CSVs + a master CSV across all timepoints.
+
+(Stage 1 is currently the only stage. Earlier versions had a separate
+aggregation stage; that's now folded into run_imagej.py.)
 
 Usage:
     python run_pipeline.py
     python run_pipeline.py --timepoint 10.03.2026
-    python run_pipeline.py --only-stage 1
     python run_pipeline.py --dry-run
 """
 
@@ -26,15 +29,9 @@ from pathlib import Path
 STAGES = [
     {
         "number":  1,
-        "name":    "Measure reflectance",
+        "name":    "Measure reflectance and aggregate",
         "script":  "run_imagej.py",
         "tp_flag": True,
-    },
-    {
-        "number":  2,
-        "name":    "Aggregate results",
-        "script":  "aggregate_results.py",
-        "tp_flag": False,
     },
 ]
 
@@ -67,14 +64,12 @@ def run_stage(stage: dict, extra_args: list[str]) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run the kelp reflectance pipeline (Stages 1–2)"
+        description="Run the kelp reflectance pipeline"
     )
     parser.add_argument("--config",     default="config.yaml")
     parser.add_argument("--timepoint",  default=None,
                         help="Process only this time point (e.g. 10.03.2026). "
-                             "Stage 4 always aggregates everything.")
-    parser.add_argument("--only-stage", type=int, default=None, metavar="N",
-                        help="Run only stage N (1 or 2)")
+                             "Updates only that date's rows in master_results.csv.")
     parser.add_argument("--dry-run",    action="store_true",
                         help="Pass --dry-run to each stage (no files written)")
     args = parser.parse_args()
@@ -83,21 +78,11 @@ def main():
         print(f"ERROR: Config not found: {args.config}")
         sys.exit(1)
 
-    only_stage = args.only_stage
-    if only_stage is not None and only_stage not in (1, 2):
-        print("ERROR: --only-stage must be 1 or 2")
-        sys.exit(1)
-
-    stages_to_run = [
-        s for s in STAGES
-        if only_stage is None or s["number"] == only_stage
-    ]
-
     print("=" * 60)
     print("Kelp Reflectance Pipeline")
     if args.timepoint:
         print(f"Time point : {args.timepoint}")
-    print(f"Stages     : {', '.join(str(s['number']) for s in stages_to_run)}")
+    print(f"Stages     : {', '.join(str(s['number']) for s in STAGES)}")
     if args.dry_run:
         print("Mode       : DRY RUN — no files will be written")
     print("=" * 60)
@@ -106,7 +91,7 @@ def main():
     results        = {}
     pipeline_start = time.time()
 
-    for stage in stages_to_run:
+    for stage in STAGES:
         n    = stage["number"]
         name = stage["name"]
         print(f"── Stage {n}: {name}")
@@ -123,14 +108,14 @@ def main():
 
         if not success:
             print(f"Pipeline stopped at Stage {n}: {name}")
-            print(f"Fix the error above, then re-run with --only-stage {n}")            
+            print(f"Fix the error above, then re-run with --only-stage {n}")
             break
 
     elapsed = time.time() - pipeline_start
     print("=" * 60)
     print(f"Pipeline finished in {elapsed:.1f}s")
     print()
-    for stage in stages_to_run:
+    for stage in STAGES:
         n = stage["number"]
         if n in results:
             status = "OK  " if results[n] else "FAIL"
@@ -142,7 +127,7 @@ def main():
     all_ok = all(results.values()) if results else False
     if all_ok:
         print("All stages completed successfully.")
-        print("Your aggregated CSV is in results/")
+        print("Per-timepoint CSVs and master_results.csv are in results/.")
     else:
         sys.exit(1)
 

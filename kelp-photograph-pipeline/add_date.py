@@ -8,6 +8,8 @@ Renames  127_128_1.tif  ->  127_128_20260529_1.tif
 The date is parsed from the parent folder name (DD-MM-YYYY).
 
 Pass --dry-run to preview without changing anything.
+
+python add_date.py /Volumes/Expansion/Heat_stress_experiment_photos/13-05-2026/tiffs
 """
 
 import re

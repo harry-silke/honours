@@ -11,15 +11,15 @@ kelp-pipeline/
 ├── config.yaml                ← the only file you edit regularly
 ├── scripts/
 │   ├── generate_macros.py     ← Stage 1: generates Fiji macros from config
-│   ├── aggregate_results.py   ← Stage 4: collates all CSVs into one clean file
-│   ├── register_images.py     ← Stage 2: NOT YET BUILT
-│   ├── run_imagej.py          ← Stage 3: NOT YET BUILT
-│   └── run_pipeline.py        ← Master runner: NOT YET BUILT
+│   ├── register_images.py     ← Stage 2: image registration
+│   ├── run_imagej.py          ← Stage 3: direct TIF measurement + per-group aggregation
+│   └── run_pipeline.py        ← Master runner
 ├── macros/                    ← auto-generated .ijm files land here
 ├── calibrations/              ← calibration .txt files land here
 ├── roi_maps/                  ← put your ROI_Map.zip here
 └── results/
-    └── raw/                   ← ImageJ CSVs land here
+    ├── raw/                   ← per-timepoint CSVs: <label>_results.csv
+    └── master_results.csv     ← concatenated across all timepoints
 ```
 
 ---
@@ -85,7 +85,7 @@ Tell it:
 
 ---
 
-## What you can run right now (before Stages 2 & 3 are built)
+## What you can run right now
 
 ### Generate macros
 After running the calibration step in Fiji and saving the .txt files to `calibrations/`:
@@ -93,15 +93,10 @@ After running the calibration step in Fiji and saving the .txt files to `calibra
 python scripts/generate_macros.py
 ```
 
-### Aggregate results
-After manually processing images in Fiji and saving CSVs to `results/raw/`:
+### Measure + aggregate
 ```bash
-python scripts/aggregate_results.py
-```
-
-Wide format (one row per sample per timepoint):
-```bash
-python scripts/aggregate_results.py --wide
+python scripts/run_imagej.py                       # all timepoints, rebuilds master CSV
+python scripts/run_imagej.py --timepoint 10.03.2026 # one date only, updates that date's rows in master
 ```
 
 ---
@@ -110,10 +105,11 @@ python scripts/aggregate_results.py --wide
 
 | Thing | Format | Example |
 |---|---|---|
-| Sample photos | sampleID1_sampleID2_DDMMYY.jpg | C1_C2_100226.jpg |
+| Sample photos | sampleID1_sampleID2_DATE_N.tif (N optional, 1-4) | C1_C2_100226_2.tif |
 | Calibration photo | calibration_DDMMYY.jpg | calibration_100226.jpg |
 | Date folders | DD.MM.YYYY | 10.02.2026 |
-| Result CSVs (auto-named) | sampleID1_sampleID2_DDMMYY_channel.csv | C1_C2_100226_red.csv |
+| Per-timepoint CSV | <label>_results.csv | 10.03.2026_results.csv |
+| Master CSV | master_results.csv | (in results/) |
 
 ---
 
@@ -130,7 +126,7 @@ That's it.
 
 ---
 
-## Final weekly workflow (when all stages are built)
+## Final weekly workflow
 
 ```bash
 # 1. Add new date folder with photos + calibration_DDMMYY.jpg
@@ -139,7 +135,7 @@ That's it.
 python scripts/run_pipeline.py
 
 # 4. Check flagged_for_review.txt if it exists
-# 5. Your CSV is ready in results/
+# 5. Your master CSV is at results/master_results.csv
 ```
 
 ---
