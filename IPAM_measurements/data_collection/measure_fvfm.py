@@ -18,8 +18,8 @@ included), matching the ImageJ macro.
 
 Filename convention: ID1_ID2_DDMMYY.tif   (e.g. 5C_4C_080526.tif)
 
-Keys:  drag box handles to adjust   |   enter/space = accept
-       r = reset boxes to carried    |   s = skip image (no row)   |   q = quit
+Keys:  1 = edit left box, 2 = edit right box (drag to draw the active one)
+       enter/space = accept  |  r = reset to carried  |  s = skip  |  q = quit
 
 Requirements:  pip install numpy tifffile matplotlib
 
@@ -35,6 +35,16 @@ from pathlib import Path
 import numpy as np
 import tifffile
 
+import matplotlib
+# The macosx backend delivers key events but not the mouse-drag events this
+# tool needs. Prefer Qt or Tk, which do. Falls back to the default otherwise.
+for _bk in ("QtAgg", "TkAgg"):
+    try:
+        matplotlib.use(_bk, force=True)
+        break
+    except Exception:
+        continue
+
 # ---- tuning knobs (nudge per run if the instrument/exposure changes) ----
 FO_FLOOR      = 40      # Fo below this = background water, not tissue
 NECROSIS_CUT  = 0.10    # tissue with Fv/Fm <= this counts as necrotic
@@ -43,7 +53,7 @@ FO_FRAME      = 0       # frame index of Fo
 FM_FRAME      = 1       # frame index of Fm
 
 COLS = ["photo_filename", "pair_key", "date", "side", "individual",
-        "rect_px", "tissue_px", "Fo", "Fm", "FvFm", "necrosis_pct",
+        "roi_px", "tissue_px", "Fo", "Fm", "FvFm", "necrosis_pct",
         "px_below_0.10", "px_below_0.15", "px_below_0.20",
         "fo_floor", "necrosis_cut"]
 
@@ -61,23 +71,32 @@ def load_fo_fm(path: Path):
     return arr[FO_FRAME].astype(float), arr[FM_FRAME].astype(float)
 
 
-def compute(fo, fm, rect):
-    x0, y0, x1, y1 = rect
+def compute(fo, fm, box):
+    """Metrics over the ellipse inscribed in the bounding box `box`
+    (x0,y0,x1,y1), so corner leak outside the beaker is excluded."""
+    x0, y0, x1, y1 = box
     fo_c = fo[y0:y1, x0:x1]
     fm_c = fm[y0:y1, x0:x1]
-    rect_px = fo_c.size
-    tissue = fo_c >= FO_FLOOR
+    h, w = fo_c.shape
+    if h == 0 or w == 0:
+        return dict(roi_px=0, tissue_px=0, Fo=np.nan, Fm=np.nan, FvFm=np.nan,
+                    necrosis_pct=np.nan, b10=0, b15=0, b20=0)
+    yy, xx = np.ogrid[0:h, 0:w]
+    cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
+    rx, ry = max(w / 2.0, 0.5), max(h / 2.0, 0.5)
+    ellipse = ((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2 <= 1.0
+    tissue = ellipse & (fo_c >= FO_FLOOR)
     n_t = int(tissue.sum())
     if n_t == 0:
-        return dict(rect_px=rect_px, tissue_px=0, Fo=np.nan, Fm=np.nan,
-                    FvFm=np.nan, necrosis_pct=np.nan,
+        return dict(roi_px=int(ellipse.sum()), tissue_px=0, Fo=np.nan,
+                    Fm=np.nan, FvFm=np.nan, necrosis_pct=np.nan,
                     b10=0, b15=0, b20=0)
     with np.errstate(divide="ignore", invalid="ignore"):
         fvfm = np.where(fm_c > 0, (fm_c - fo_c) / fm_c, 0.0)
     fvfm = np.clip(fvfm, 0.0, FVFM_MAX)
     t = fvfm[tissue]
     return dict(
-        rect_px=rect_px, tissue_px=n_t,
+        roi_px=int(ellipse.sum()), tissue_px=n_t,
         Fo=round(float(fo_c[tissue].mean()), 2),
         Fm=round(float(fm_c[tissue].mean()), 2),
         FvFm=round(float(t.mean()), 4),
@@ -92,10 +111,13 @@ def parse_name(stem: str):
 
 
 def confirm_image(fo, fm, boxes, title):
-    """Show Fm with two draggable boxes; return ('accept', boxes) / ('skip',)
-    / ('quit',). boxes is {'left': (x0,y0,x1,y1), 'right': (...)}."""
+    """Show Fm; pick a side with 1 (left) or 2 (right), then click-drag to
+    draw that box. Raw mouse events, no RectangleSelector. Returns
+    ('accept', boxes) / ('skip',) / ('quit',)."""
+    import matplotlib
     import matplotlib.pyplot as plt
-    from matplotlib.widgets import RectangleSelector
+    from matplotlib.patches import Ellipse
+    print(f"matplotlib backend: {matplotlib.get_backend()}")
 
     H, W = fm.shape
     disp = fm.copy()
@@ -104,52 +126,96 @@ def confirm_image(fo, fm, boxes, title):
 
     fig, ax = plt.subplots(figsize=(9, 7))
     ax.imshow(disp, cmap="gray", vmin=lo, vmax=hi)
-    ax.set_title(title, fontsize=10)
     ax.set_axis_off()
 
-    state = {"action": None}
+    ext = {s: (boxes[s][0], boxes[s][2], boxes[s][1], boxes[s][3])  # x0,x1,y0,y1
+           for s in ("left", "right")}
+    colour = {"left": "red", "right": "cyan"}
+    patch = {}
+    for side in ("left", "right"):
+        x0, x1, y0, y1 = ext[side]
+        e = Ellipse(((x0 + x1) / 2, (y0 + y1) / 2), abs(x1 - x0), abs(y1 - y0),
+                    fill=False, edgecolor=colour[side], linewidth=1.6)
+        ax.add_patch(e)
+        patch[side] = e
 
-    def mk(side, colour):
-        s = RectangleSelector(ax, lambda *a: None, useblit=True,
-                              button=[1], interactive=True,
-                              props=dict(edgecolor=colour, facecolor="none",
-                                         linewidth=1.6))
-        x0, y0, x1, y1 = boxes[side]
-        s.extents = (x0, x1, y0, y1)
-        return s
-    sels = {"left": mk("left", "red"), "right": mk("right", "cyan")}
+    st = {"action": None, "active": "left", "pressed": False,
+          "x0": 0, "y0": 0, "lastx": 0, "lasty": 0}
+
+    def set_title():
+        a = st["active"]
+        ax.set_title(title + f"\nACTIVE: {a} ({colour[a]})", fontsize=10)
+        fig.canvas.draw_idle()
+    set_title()
+
+    def draw_box(side, x0, x1, y0, y1):
+        e = patch[side]
+        e.set_center(((x0 + x1) / 2, (y0 + y1) / 2))
+        e.width = abs(x1 - x0)
+        e.height = abs(y1 - y0)
+        fig.canvas.draw_idle()
+
+    def on_press(e):
+        if e.inaxes != ax or e.xdata is None:
+            return
+        st["pressed"] = True
+        st["x0"], st["y0"] = e.xdata, e.ydata
+        st["lastx"], st["lasty"] = e.xdata, e.ydata
+        print(f"press  {st['active']} at ({e.xdata:.0f},{e.ydata:.0f})")
+
+    def on_motion(e):
+        if not st["pressed"] or e.inaxes != ax or e.xdata is None:
+            return
+        st["lastx"], st["lasty"] = e.xdata, e.ydata
+        draw_box(st["active"], st["x0"], e.xdata, st["y0"], e.ydata)
+
+    def on_release(e):
+        if not st["pressed"]:
+            return
+        st["pressed"] = False
+        x1 = e.xdata if e.xdata is not None else st["lastx"]
+        y1 = e.ydata if e.ydata is not None else st["lasty"]
+        ext[st["active"]] = (st["x0"], x1, st["y0"], y1)
+        draw_box(st["active"], st["x0"], x1, st["y0"], y1)
+        print(f"release {st['active']} box -> "
+              f"({st['x0']:.0f},{st['y0']:.0f})-({x1:.0f},{y1:.0f})")
 
     def read():
         out = {}
-        for side, s in sels.items():
-            x0, x1, y0, y1 = s.extents
+        for side in ("left", "right"):
+            x0, x1, y0, y1 = ext[side]
             x0, x1 = sorted((int(round(x0)), int(round(x1))))
             y0, y1 = sorted((int(round(y0)), int(round(y1))))
-            x0, x1 = max(0, x0), min(W, x1)
-            y0, y1 = max(0, y0), min(H, y1)
-            out[side] = (x0, y0, x1, y1)
+            out[side] = (max(0, x0), max(0, y0), min(W, x1), min(H, y1))
         return out
 
     def on_key(e):
-        if e.key in (" ", "enter"):
-            state["action"] = ("accept", read())
-        elif e.key == "s":
-            state["action"] = ("skip",)
-        elif e.key == "q":
-            state["action"] = ("quit",)
-        elif e.key == "r":
-            for side, s in sels.items():
-                x0, y0, x1, y1 = boxes[side]
-                s.extents = (x0, x1, y0, y1)
-            fig.canvas.draw_idle()
+        if e.key == "1":
+            st["active"] = "left"; set_title(); return
+        if e.key == "2":
+            st["active"] = "right"; set_title(); return
+        if e.key == "r":
+            for side in ("left", "right"):
+                ext[side] = (boxes[side][0], boxes[side][2],
+                             boxes[side][1], boxes[side][3])
+                draw_box(side, *ext[side])
             return
+        if e.key in (" ", "enter"):
+            st["action"] = ("accept", read())
+        elif e.key == "s":
+            st["action"] = ("skip",)
+        elif e.key == "q":
+            st["action"] = ("quit",)
         else:
             return
         plt.close(fig)
 
+    fig.canvas.mpl_connect("button_press_event", on_press)
+    fig.canvas.mpl_connect("motion_notify_event", on_motion)
+    fig.canvas.mpl_connect("button_release_event", on_release)
     fig.canvas.mpl_connect("key_press_event", on_key)
     plt.show()
-    return state["action"] or ("skip",)
+    return st["action"] or ("skip",)
 
 
 def main():
@@ -191,7 +257,8 @@ def main():
             continue
         id1, id2, date = parse_name(tif.stem)
         title = (f"[{i}/{len(todo)}]  {tif.name}\n"
-                 f"drag handles | enter=accept  r=reset  s=skip  q=quit")
+                 f"1=left 2=right, drag to draw | enter=accept r=reset "
+                 f"s=skip q=quit")
         res = confirm_image(fo, fm, boxes, title)
 
         if res[0] == "quit":
@@ -208,7 +275,7 @@ def main():
             writer.writerow({
                 "photo_filename": tif.name, "pair_key": pair_key, "date": date,
                 "side": side, "individual": individual,
-                "rect_px": m["rect_px"], "tissue_px": m["tissue_px"],
+                "roi_px": m["roi_px"], "tissue_px": m["tissue_px"],
                 "Fo": m["Fo"], "Fm": m["Fm"], "FvFm": m["FvFm"],
                 "necrosis_pct": m["necrosis_pct"],
                 "px_below_0.10": m["b10"], "px_below_0.15": m["b15"],
