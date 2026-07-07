@@ -5,3 +5,4 @@ results/
 *.tif
 .DS_Store
 *.todo
+.notes
