@@ -10,10 +10,22 @@ Outputs TWO CSV files:
 
 Data sources:
   [A] OSTIA SST L4            – sea surface temperature (Copernicus)
-  [B] GLORYS12 physics        – temp, salinity, MLD, currents, bottom temp (Copernicus)
+  [B] GLORYS12 physics        – temp, salinity, MLD, currents (Copernicus)
   [C] GLORYS12 biogeochemistry– nitrate, phosphate, chlorophyll, O2 (Copernicus)
   [D] CMEMS wave reanalysis   – significant wave height, period, direction (Copernicus)
-  [E] BRAN2020                – temp, salinity, MLD, currents (NCI OPeNDAP, free)
+  [E] BRAN2020                – temp, salinity, MLD (NCI OPeNDAP, free)
+
+CHANGES IN THIS REVISION
+------------------------
+  * Wave direction (VMDR) is a CIRCULAR variable. It is now summarised with a
+    circular mean / circular std (vector averaging), and min/max are dropped
+    because they are undefined on a compass bearing. Previously the arithmetic
+    mean produced physically wrong bearings (e.g. mean of 350 and 10 -> 180).
+  * BRAN now uses nearest_wet_point (land-mask aware) like the CMEMS sources,
+    so coastal sites no longer silently return all-NaN when the nearest BRAN
+    cell is land.
+  * Added glorys_speed = sqrt(uo^2 + vo^2), a scalar current speed. This is a
+    cleaner RDA predictor than the signed u/v components (which are retained).
 
 REQUIRED ACCOUNT
 -----------------
@@ -119,7 +131,7 @@ PHY_DATASET     = "cmems_mod_glo_phy_my_0.083deg_P1M-m"
 # Product: GLOBAL_MULTIYEAR_BGC_001_029
 BGC_DATASET     = "cmems_mod_glo_bgc_my_0.25deg_P1M-m"
 
-# [D] Waves — ERA5-based global wave reanalysis, monthly, 0.5°
+# [D] Waves — global wave reanalysis, monthly, 0.2°
 # Product: GLOBAL_MULTIYEAR_WAV_001_032
 WAV_DATASET     = "cmems_mod_glo_wav_my_0.2deg_P1M-m"
 
@@ -133,10 +145,89 @@ def nearest_point(ds, lat, lon):
     return ds.sel({lat_dim: lat, lon_dim: lon}, method="nearest")
 
 
+def nearest_wet_point(ds, lat, lon, ref_var=None, window=8):
+    """
+    Select the nearest OCEAN grid cell to (lat, lon).
+
+    Coastal kelp sites frequently fall on (or beside) a masked land cell,
+    especially on the coarser BGC (0.25 deg) and wave (0.2 deg) grids — the
+    single nearest cell is then NaN and the site drops out. This searches a
+    window of cells around the target, keeps those where `ref_var` has any
+    valid (non-NaN) data, and returns the NEAREST such wet cell. All variables
+    in a dataset share the same land mask, so one reference variable suffices.
+
+    Falls back to the plain nearest cell if no wet cell is found in the window
+    (the result will be NaN, flagging a genuinely land-locked lookup).
+    """
+    lat_dim = "latitude" if "latitude" in ds.dims else "lat"
+    lon_dim = "longitude" if "longitude" in ds.dims else "lon"
+
+    if ref_var is None:
+        ref_var = list(ds.data_vars)[0]
+
+    lats = ds[lat_dim].values
+    lons = ds[lon_dim].values
+    ilat = int(np.abs(lats - lat).argmin())
+    ilon = int(np.abs(lons - lon).argmin())
+
+    lat_sl = slice(max(0, ilat - window), ilat + window + 1)
+    lon_sl = slice(max(0, ilon - window), ilon + window + 1)
+    sub = ds.isel({lat_dim: lat_sl, lon_dim: lon_sl})
+
+    da = sub[ref_var]
+    reduce_dims = [d for d in da.dims if d not in (lat_dim, lon_dim)]
+    valid = da.notnull().any(dim=reduce_dims) if reduce_dims else da.notnull()
+    valid = valid.transpose(lat_dim, lon_dim)
+    valid_np = valid.values
+
+    if not valid_np.any():
+        return ds.sel({lat_dim: lat, lon_dim: lon}, method="nearest")
+
+    sub_lats = sub[lat_dim].values
+    sub_lons = sub[lon_dim].values
+    LON, LAT = np.meshgrid(sub_lons, sub_lats)   # shape (nlat, nlon)
+    # approximate great-circle distance; cos-correct longitude for latitude
+    dist = np.sqrt((LAT - lat) ** 2 +
+                   ((LON - lon) * np.cos(np.deg2rad(lat))) ** 2)
+    dist = np.where(valid_np, dist, np.inf)
+    j, k = np.unravel_index(int(np.argmin(dist)), dist.shape)
+    return sub.isel({lat_dim: j, lon_dim: k})
+
+
+# --- circular statistics for directional variables (e.g. wave direction) ----
+
+def circular_mean_deg(deg):
+    """Vector (circular) mean of bearings in degrees. Returns 0–360 or NaN."""
+    deg = np.asarray(deg, dtype=float)
+    deg = deg[~np.isnan(deg)]
+    if deg.size == 0:
+        return np.nan
+    r = np.deg2rad(deg)
+    ang = np.rad2deg(np.arctan2(np.mean(np.sin(r)), np.mean(np.cos(r))))
+    return float(ang % 360.0)
+
+
+def circular_std_deg(deg):
+    """
+    Circular standard deviation of bearings in degrees.
+    sd = sqrt(-2 ln R), where R is the mean resultant length. Small sd => tight
+    directional spread; large sd => near-uniform / no preferred direction.
+    """
+    deg = np.asarray(deg, dtype=float)
+    deg = deg[~np.isnan(deg)]
+    if deg.size == 0:
+        return np.nan
+    r = np.deg2rad(deg)
+    R = np.hypot(np.mean(np.sin(r)), np.mean(np.cos(r)))
+    R = min(max(R, 1e-12), 1.0)
+    return float(np.rad2deg(np.sqrt(-2.0 * np.log(R))))
+
+
 def summary_stats(da, prefix):
     """
-    Climatological summary stats from a DataArray time series.
+    Climatological summary stats from a linear DataArray time series.
     Southern Hemisphere: summer = DJF, winter = JJA.
+    Do NOT use this for directional variables — see circular_summary.
     """
     vals = da.values.flatten()
     vals = vals[~np.isnan(vals)]
@@ -162,11 +253,29 @@ def summary_stats(da, prefix):
     return stats
 
 
+def circular_summary(da, prefix):
+    """
+    Circular summary for a directional DataArray (degrees).
+    Emits mean/std and seasonal circular means. No min/max: they are undefined
+    on a compass bearing (0 and 359 are adjacent, not extremes).
+    """
+    out = {
+        f"{prefix}_mean": circular_mean_deg(da.values.flatten()),
+        f"{prefix}_std":  circular_std_deg(da.values.flatten()),
+    }
+    try:
+        out[f"{prefix}_summer_mean"] = circular_mean_deg(
+            da.sel(time=da["time.season"] == "DJF").values.flatten())
+        out[f"{prefix}_winter_mean"] = circular_mean_deg(
+            da.sel(time=da["time.season"] == "JJA").values.flatten())
+    except Exception:
+        out[f"{prefix}_summer_mean"] = np.nan
+        out[f"{prefix}_winter_mean"] = np.nan
+    return out
+
+
 def window_mean(da, date_str, days=30):
-    """
-    Mean of a DataArray within ±days of a sampling date.
-    Returns a single float.
-    """
+    """Mean of a linear DataArray within ±days of a sampling date."""
     centre = pd.Timestamp(date_str)
     t_min  = centre - timedelta(days=days)
     t_max  = centre + timedelta(days=days)
@@ -175,6 +284,18 @@ def window_mean(da, date_str, days=30):
         vals = subset.values.flatten()
         vals = vals[~np.isnan(vals)]
         return float(np.nanmean(vals)) if len(vals) > 0 else np.nan
+    except Exception:
+        return np.nan
+
+
+def window_circular_mean(da, date_str, days=30):
+    """Circular mean of a directional DataArray within ±days of a date."""
+    centre = pd.Timestamp(date_str)
+    t_min  = centre - timedelta(days=days)
+    t_max  = centre + timedelta(days=days)
+    try:
+        subset = da.sel(time=slice(str(t_min.date()), str(t_max.date())))
+        return circular_mean_deg(subset.values.flatten())
     except Exception:
         return np.nan
 
@@ -214,8 +335,12 @@ def get_sst():
 
 
 # =============================================================================
-# [B] GLORYS12 PHYSICS — surface + bottom temperature
+# [B] GLORYS12 PHYSICS — surface
 # =============================================================================
+# NOTE: "bottom temperature" was dropped. The only depth layers available in
+# the requested 100–200 m range (110/131/156/186 m) sit below the seafloor at
+# these shallow coastal kelp sites, so every site returned NaN. The variable is
+# ill-defined here; use surface/bulk temperature instead.
 
 def get_physics():
     print("\n[B] GLORYS12 Physics ...")
@@ -229,18 +354,7 @@ def get_physics():
     if "depth" in ds_surf.dims:
         ds_surf = ds_surf.isel(depth=0, drop=True)
 
-    # Bottom temperature (deepest available layer ~200m for shelf sites)
-    nc_bot = OUT_DIR / "glorys_bottom.nc"
-    cmems_subset(PHY_DATASET,
-                 ["thetao"],
-                 nc_bot,
-                 {"minimum_depth": 100.0, "maximum_depth": 200.0})
-    ds_bot = xr.open_dataset(nc_bot)
-    if "depth" in ds_bot.dims:
-        ds_bot = ds_bot.isel(depth=-1, drop=True)
-    ds_bot = ds_bot.rename({"thetao": "bottom_temp"})
-
-    return ds_surf, ds_bot
+    return ds_surf
 
 
 # =============================================================================
@@ -278,12 +392,14 @@ def get_waves():
 # =============================================================================
 
 BRAN_BASE = "https://thredds.nci.org.au/thredds/dodsC/gb6/BRAN/BRAN2020/daily"
+# NOTE: BRAN u/v (currents) were dropped. Those files live on the staggered
+# velocity grid (xu_ocean/yu_ocean) rather than the tracer grid handled below,
+# so every fetch failed and the columns were always empty. Surface currents are
+# already covered by GLORYS uo/vo, so BRAN currents are redundant here.
 BRAN_VARS = {
     "ocean_temp": ("temp", "bran_temp"),
     "ocean_salt": ("salt", "bran_salinity"),
     "ocean_mld":  ("mld",  "bran_mld"),
-    "ocean_u":    ("u",    "bran_u"),
-    "ocean_v":    ("v",    "bran_v"),
 }
 
 
@@ -309,7 +425,10 @@ def get_bran(sites):
                 if "depth" in ds.dims:
                     ds = ds.isel(depth=0, drop=True)
                 for site in sites:
-                    pt = nearest_point(ds, site["lat"], site["lon"])
+                    # wet-point aware, matching the CMEMS sources; ref_var is
+                    # pinned to the field so we don't pick up a bounds variable.
+                    pt = nearest_wet_point(ds, site["lat"], site["lon"],
+                                           ref_var=field)
                     if field in pt:
                         v = pt[field].values.flatten()
                         accum[site["site"]][prefix].extend(v[~np.isnan(v)].tolist())
@@ -323,7 +442,7 @@ def get_bran(sites):
 # BUILD CLIMATOLOGY CSV — one row per unique site
 # =============================================================================
 
-def build_climatology(ds_sst, ds_surf, ds_bot, ds_bgc, ds_wav, bran_accum):
+def build_climatology(ds_sst, ds_surf, ds_bgc, ds_wav, bran_accum):
     print("\n Building climatology table ...")
     rows = []
     for site in tqdm(UNIQUE_SITES, desc="  Sites"):
@@ -331,34 +450,34 @@ def build_climatology(ds_sst, ds_surf, ds_bot, ds_bgc, ds_wav, bran_accum):
                "lat": site["lat"], "lon": site["lon"]}
 
         # [A] SST
-        pt = nearest_point(ds_sst, site["lat"], site["lon"])
+        pt = nearest_wet_point(ds_sst, site["lat"], site["lon"])
         row.update(summary_stats(pt["analysed_sst"], "sst"))
 
         # [B] Physics surface
-        pt = nearest_point(ds_surf, site["lat"], site["lon"])
+        pt = nearest_wet_point(ds_surf, site["lat"], site["lon"])
         for var, pfx in [("thetao","glorys_temp"),("so","glorys_salinity"),
                           ("mlotst","glorys_mld"),("uo","glorys_u"),("vo","glorys_v")]:
             if var in pt:
                 row.update(summary_stats(pt[var], pfx))
-
-        # [B] Bottom temperature
-        pt = nearest_point(ds_bot, site["lat"], site["lon"])
-        if "bottom_temp" in pt:
-            row.update(summary_stats(pt["bottom_temp"], "glorys_bottom_temp"))
+        # scalar current speed — cleaner RDA predictor than signed u/v
+        if "uo" in pt and "vo" in pt:
+            speed = np.sqrt(pt["uo"] ** 2 + pt["vo"] ** 2)
+            row.update(summary_stats(speed, "glorys_speed"))
 
         # [C] BGC
-        pt = nearest_point(ds_bgc, site["lat"], site["lon"])
+        pt = nearest_wet_point(ds_bgc, site["lat"], site["lon"])
         for var, pfx in [("no3","nitrate"),("po4","phosphate"),
                           ("chl","chlorophyll"),("o2","oxygen"),("phyc","phytoplankton")]:
             if var in pt:
                 row.update(summary_stats(pt[var], pfx))
 
-        # [D] Waves
-        pt = nearest_point(ds_wav, site["lat"], site["lon"])
-        for var, pfx in [("VHM0","wave_height"),("VTPK","wave_period"),
-                          ("VMDR","wave_direction")]:
+        # [D] Waves — height/period are linear, direction is circular
+        pt = nearest_wet_point(ds_wav, site["lat"], site["lon"])
+        for var, pfx in [("VHM0","wave_height"),("VTPK","wave_period")]:
             if var in pt:
                 row.update(summary_stats(pt[var], pfx))
+        if "VMDR" in pt:
+            row.update(circular_summary(pt["VMDR"], "wave_direction"))
 
         # [E] BRAN
         for _, prefix in BRAN_VARS.values():
@@ -380,7 +499,7 @@ def build_climatology(ds_sst, ds_surf, ds_bot, ds_bgc, ds_wav, bran_accum):
 # BUILD AT-SAMPLING CSV — one row per sampling visit
 # =============================================================================
 
-def build_at_sampling(ds_sst, ds_surf, ds_bot, ds_bgc, ds_wav):
+def build_at_sampling(ds_sst, ds_surf, ds_bgc, ds_wav):
     print("\n Building at-sampling-date table ...")
     rows = []
     for s in tqdm(SAMPLING_ROWS, desc="  Rows"):
@@ -388,35 +507,33 @@ def build_at_sampling(ds_sst, ds_surf, ds_bot, ds_bgc, ds_wav):
                "sampling_date": s["date"], "lat": s["lat"], "lon": s["lon"]}
 
         # [A] SST
-        pt = nearest_point(ds_sst, s["lat"], s["lon"])
+        pt = nearest_wet_point(ds_sst, s["lat"], s["lon"])
         row["sst_sample_mean"] = window_mean(pt["analysed_sst"], s["date"])
 
         # [B] Physics surface
-        pt = nearest_point(ds_surf, s["lat"], s["lon"])
+        pt = nearest_wet_point(ds_surf, s["lat"], s["lon"])
         for var, pfx in [("thetao","glorys_temp"),("so","glorys_salinity"),
                           ("mlotst","glorys_mld"),("uo","glorys_u"),("vo","glorys_v")]:
             if var in pt:
                 row[f"{pfx}_sample_mean"] = window_mean(pt[var], s["date"])
-
-        # [B] Bottom temp
-        pt = nearest_point(ds_bot, s["lat"], s["lon"])
-        if "bottom_temp" in pt:
-            row["glorys_bottom_temp_sample_mean"] = window_mean(
-                pt["bottom_temp"], s["date"])
+        if "uo" in pt and "vo" in pt:
+            speed = np.sqrt(pt["uo"] ** 2 + pt["vo"] ** 2)
+            row["glorys_speed_sample_mean"] = window_mean(speed, s["date"])
 
         # [C] BGC
-        pt = nearest_point(ds_bgc, s["lat"], s["lon"])
+        pt = nearest_wet_point(ds_bgc, s["lat"], s["lon"])
         for var, pfx in [("no3","nitrate"),("po4","phosphate"),
                           ("chl","chlorophyll"),("o2","oxygen"),("phyc","phytoplankton")]:
             if var in pt:
                 row[f"{pfx}_sample_mean"] = window_mean(pt[var], s["date"])
 
         # [D] Waves
-        pt = nearest_point(ds_wav, s["lat"], s["lon"])
-        for var, pfx in [("VHM0","wave_height"),("VTPK","wave_period"),
-                          ("VMDR","wave_direction")]:
+        pt = nearest_wet_point(ds_wav, s["lat"], s["lon"])
+        for var, pfx in [("VHM0","wave_height"),("VTPK","wave_period")]:
             if var in pt:
                 row[f"{pfx}_sample_mean"] = window_mean(pt[var], s["date"])
+        if "VMDR" in pt:
+            row["wave_direction_sample_mean"] = window_circular_mean(pt["VMDR"], s["date"])
 
         rows.append(row)
     return pd.DataFrame(rows)
@@ -439,25 +556,24 @@ def main():
     print()
     print("  Variables collected:")
     print("    SST (OSTIA)              – sea surface temperature")
-    print("    Physics (GLORYS12)       – temp, salinity, MLD, u/v currents,")
-    print("                               bottom temperature")
+    print("    Physics (GLORYS12)       – temp, salinity, MLD, u/v + speed")
     print("    Biogeochemistry (PISCES) – nitrate, phosphate, chlorophyll,")
     print("                               dissolved oxygen, phytoplankton")
-    print("    Waves (CMEMS)            – significant wave height, peak period,")
-    print("                               mean direction")
-    print("    BRAN2020 (NCI OPeNDAP)  – temp, salinity, MLD, u/v currents")
+    print("    Waves (CMEMS)            – sig wave height, peak period,")
+    print("                               mean direction (circular)")
+    print("    BRAN2020 (NCI OPeNDAP)  – temp, salinity, MLD")
     print()
 
     # --- Download all datasets ---
     ds_sst          = get_sst()
-    ds_surf, ds_bot = get_physics()
+    ds_surf         = get_physics()
     ds_bgc          = get_bgc()
     ds_wav          = get_waves()
     bran_accum      = get_bran(UNIQUE_SITES)
 
     # --- Build output tables ---
-    df_clim   = build_climatology(ds_sst, ds_surf, ds_bot, ds_bgc, ds_wav, bran_accum)
-    df_sample = build_at_sampling(ds_sst, ds_surf, ds_bot, ds_bgc, ds_wav)
+    df_clim   = build_climatology(ds_sst, ds_surf, ds_bgc, ds_wav, bran_accum)
+    df_sample = build_at_sampling(ds_sst, ds_surf, ds_bgc, ds_wav)
 
     # --- Save ---
     clim_csv   = OUT_DIR / "env_climatology.csv"
@@ -471,8 +587,8 @@ def main():
     print(f"  At-sampling CSV:  {sample_csv}")
     print(f"    Shape: {df_sample.shape[0]} rows × {df_sample.shape[1]} variables")
     print()
-    print("  Next: use env_climatology.csv as your X matrix in RDA/GEA")
+    print("  Next: prune to a low-collinearity subset before RDA (see notes).")
 
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()

@@ -1,8 +1,8 @@
 results/
 *.csv
+!GEA/kelp_env_data/env_climatology.csv
 *.png
 *.nc
 *.tif
 .DS_Store
 *.todo
-.notes
