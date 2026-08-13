@@ -145,7 +145,41 @@ def nearest_point(ds, lat, lon):
     return ds.sel({lat_dim: lat, lon_dim: lon}, method="nearest")
 
 
-def nearest_wet_point(ds, lat, lon, ref_var=None, window=8):
+# --- wet-cell lookup audit -------------------------------------------------
+# Every wet-cell lookup records how far it travelled from the target site.
+# A NaN turned into a nearby ocean value is a clean fill; a NaN turned into a
+# value borrowed from cells away is a silent problem, because it enters the RDA
+# as if it were real. This log lets you eyeball that before trusting the fill.
+WET_LOOKUP_LOG = []
+EYEBALL_KM = 30.0   # flag lookups beyond this; note BGC/wave cells are ~22-27 km
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    """Great-circle distance between two points, in kilometres."""
+    R = 6371.0
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    dphi = np.radians(lat2 - lat1)
+    dlmb = np.radians(lon2 - lon1)
+    a = np.sin(dphi / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dlmb / 2) ** 2
+    return float(2 * R * np.arcsin(np.sqrt(a)))
+
+
+def _log_lookup(tag, tlat, tlon, result, lat_dim, lon_dim, wet):
+    """Record how far a wet-cell lookup travelled. No-op when tag is None."""
+    if tag is None:
+        return
+    clat = float(np.atleast_1d(result[lat_dim].values)[0])
+    clon = float(np.atleast_1d(result[lon_dim].values)[0])
+    WET_LOOKUP_LOG.append({
+        "tag": tag,
+        "target_lat": tlat, "target_lon": tlon,
+        "chosen_lat": clat, "chosen_lon": clon,
+        "displacement_km": round(haversine_km(tlat, tlon, clat, clon), 2),
+        "wet_cell_found": wet,
+    })
+
+
+def nearest_wet_point(ds, lat, lon, ref_var=None, window=8, tag=None):
     """
     Select the nearest OCEAN grid cell to (lat, lon).
 
@@ -158,6 +192,8 @@ def nearest_wet_point(ds, lat, lon, ref_var=None, window=8):
 
     Falls back to the plain nearest cell if no wet cell is found in the window
     (the result will be NaN, flagging a genuinely land-locked lookup).
+
+    Pass `tag` (e.g. "bgc:SIS") to record the displacement in WET_LOOKUP_LOG.
     """
     lat_dim = "latitude" if "latitude" in ds.dims else "lat"
     lon_dim = "longitude" if "longitude" in ds.dims else "lon"
@@ -181,7 +217,9 @@ def nearest_wet_point(ds, lat, lon, ref_var=None, window=8):
     valid_np = valid.values
 
     if not valid_np.any():
-        return ds.sel({lat_dim: lat, lon_dim: lon}, method="nearest")
+        result = ds.sel({lat_dim: lat, lon_dim: lon}, method="nearest")
+        _log_lookup(tag, lat, lon, result, lat_dim, lon_dim, wet=False)
+        return result
 
     sub_lats = sub[lat_dim].values
     sub_lons = sub[lon_dim].values
@@ -191,7 +229,74 @@ def nearest_wet_point(ds, lat, lon, ref_var=None, window=8):
                    ((LON - lon) * np.cos(np.deg2rad(lat))) ** 2)
     dist = np.where(valid_np, dist, np.inf)
     j, k = np.unravel_index(int(np.argmin(dist)), dist.shape)
-    return sub.isel({lat_dim: j, lon_dim: k})
+    result = sub.isel({lat_dim: j, lon_dim: k})
+    _log_lookup(tag, lat, lon, result, lat_dim, lon_dim, wet=True)
+    return result
+
+
+def write_lookup_report(out_dir):
+    """Dump the wet-cell displacement audit and print the outliers to eyeball."""
+    if not WET_LOOKUP_LOG:
+        return
+    df = pd.DataFrame(WET_LOOKUP_LOG)
+    df["dataset"] = df["tag"].str.split(":").str[0]
+    df["site"]    = df["tag"].str.split(":").str[1]
+    # collapse the three per-variable BRAN tags onto their shared tracer grid
+    df["grid"]    = df["dataset"].str.replace(r"^bran_.*$", "bran", regex=True)
+    df["cell"]    = (df["chosen_lat"].round(4).astype(str) + "," +
+                     df["chosen_lon"].round(4).astype(str))
+    df = df.sort_values("displacement_km", ascending=False)
+    path = out_dir / "wet_lookup_report.csv"
+    df.to_csv(path, index=False)
+
+    print("\n Wet-cell lookup displacement report")
+    print(f"  Saved: {path}")
+    print(f"  Overall max displacement: {df['displacement_km'].max():.1f} km")
+    print("  Max per dataset:")
+    for dsname, g in df.groupby("dataset"):
+        print(f"    {dsname:16s} {g['displacement_km'].max():6.1f} km")
+
+    landlocked = df[~df["wet_cell_found"]]
+    if len(landlocked):
+        print(f"  WARNING: {len(landlocked)} lookups found NO wet cell (still NaN):")
+        for _, r in landlocked.iterrows():
+            print(f"    {r['tag']}")
+
+    far = df[df["displacement_km"] > EYEBALL_KM]
+    if len(far):
+        print(f"  Eyeball these {len(far)} lookups > {EYEBALL_KM:.0f} km from target:")
+        for _, r in far.head(15).iterrows():
+            print(f"    {r['tag']:22s} {r['displacement_km']:7.1f} km  "
+                  f"-> ({r['chosen_lat']:.3f}, {r['chosen_lon']:.3f})")
+    else:
+        print(f"  All lookups within {EYEBALL_KM:.0f} km of target. Fill looks clean.")
+
+    # --- cell collisions -----------------------------------------------------
+    # Sites that snap to the SAME grid cell get byte-identical values for that
+    # grid's variables. In an RDA that is fake replication: several rows of the
+    # X matrix are duplicates, which can drag an axis and inflate significance.
+    # Small displacement does NOT prevent this — it is a property of grid size.
+    print("\n Cell collisions (sites sharing one grid cell):")
+    collisions, any_collision = [], False
+    for gridname, g in df.groupby("grid"):
+        shared = {cell: sorted(set(sub["site"]))
+                  for cell, sub in g.groupby("cell")
+                  if sub["site"].nunique() > 1}
+        if shared:
+            any_collision = True
+            print(f"    {gridname}:")
+            for cell, sites in shared.items():
+                print(f"      {', '.join(sites)}  -> cell ({cell})")
+                for s in sites:
+                    collisions.append({
+                        "grid": gridname, "cell": cell, "site": s,
+                        "shared_with": ", ".join(x for x in sites if x != s)})
+    if not any_collision:
+        print("    none — every site occupies its own cell in every grid")
+    else:
+        cpath = out_dir / "cell_collisions.csv"
+        pd.DataFrame(collisions).to_csv(cpath, index=False)
+        print(f"  Saved collision list: {cpath}")
 
 
 # --- circular statistics for directional variables (e.g. wave direction) ----
@@ -408,6 +513,7 @@ def get_bran(sites):
     print("\n[E] BRAN2020 via NCI OPeNDAP ...")
     months = pd.date_range(start=CLIM_START, end="2019-12-01", freq="MS")
     accum = {s["site"]: {p: [] for _, p in BRAN_VARS.values()} for s in sites}
+    bran_logged = set()   # log displacement once per (site, variable)
 
     for dt in tqdm(months, desc="  BRAN chunks"):
         y, m = dt.year, dt.month
@@ -427,11 +533,16 @@ def get_bran(sites):
                 for site in sites:
                     # wet-point aware, matching the CMEMS sources; ref_var is
                     # pinned to the field so we don't pick up a bounds variable.
+                    key = (site["site"], prefix)
+                    want_log = key not in bran_logged
+                    tag = f"{prefix}:{site['site']}" if want_log else None
                     pt = nearest_wet_point(ds, site["lat"], site["lon"],
-                                           ref_var=field)
+                                           ref_var=field, tag=tag)
                     if field in pt:
                         v = pt[field].values.flatten()
                         accum[site["site"]][prefix].extend(v[~np.isnan(v)].tolist())
+                        if want_log:
+                            bran_logged.add(key)
                 ds.close()
             except Exception:
                 pass
@@ -449,12 +560,14 @@ def build_climatology(ds_sst, ds_surf, ds_bgc, ds_wav, bran_accum):
         row = {"site": site["site"], "location": site["location"],
                "lat": site["lat"], "lon": site["lon"]}
 
+        sid = site["site"]
+
         # [A] SST
-        pt = nearest_wet_point(ds_sst, site["lat"], site["lon"])
+        pt = nearest_wet_point(ds_sst, site["lat"], site["lon"], tag=f"sst:{sid}")
         row.update(summary_stats(pt["analysed_sst"], "sst"))
 
         # [B] Physics surface
-        pt = nearest_wet_point(ds_surf, site["lat"], site["lon"])
+        pt = nearest_wet_point(ds_surf, site["lat"], site["lon"], tag=f"glorys:{sid}")
         for var, pfx in [("thetao","glorys_temp"),("so","glorys_salinity"),
                           ("mlotst","glorys_mld"),("uo","glorys_u"),("vo","glorys_v")]:
             if var in pt:
@@ -465,14 +578,14 @@ def build_climatology(ds_sst, ds_surf, ds_bgc, ds_wav, bran_accum):
             row.update(summary_stats(speed, "glorys_speed"))
 
         # [C] BGC
-        pt = nearest_wet_point(ds_bgc, site["lat"], site["lon"])
+        pt = nearest_wet_point(ds_bgc, site["lat"], site["lon"], tag=f"bgc:{sid}")
         for var, pfx in [("no3","nitrate"),("po4","phosphate"),
                           ("chl","chlorophyll"),("o2","oxygen"),("phyc","phytoplankton")]:
             if var in pt:
                 row.update(summary_stats(pt[var], pfx))
 
         # [D] Waves — height/period are linear, direction is circular
-        pt = nearest_wet_point(ds_wav, site["lat"], site["lon"])
+        pt = nearest_wet_point(ds_wav, site["lat"], site["lon"], tag=f"wave:{sid}")
         for var, pfx in [("VHM0","wave_height"),("VTPK","wave_period")]:
             if var in pt:
                 row.update(summary_stats(pt[var], pfx))
@@ -540,6 +653,57 @@ def build_at_sampling(ds_sst, ds_surf, ds_bgc, ds_wav):
 
 
 # =============================================================================
+# AUDIT-ONLY MODE — rebuild wet_lookup_report.csv without re-downloading
+# =============================================================================
+
+def audit_wet_lookups():
+    """
+    Regenerate ONLY wet_lookup_report.csv. No re-download, no climatology
+    recompute. The CMEMS getters open their cached netCDFs (cmems_subset skips
+    the download when the file already exists), and BRAN opens a SINGLE month
+    per variable just to read its land mask. Run with:  python <script> --audit
+    """
+    WET_LOOKUP_LOG.clear()
+    print("Audit mode: rebuilding wet_lookup_report.csv from cache ...")
+
+    ds_sst  = get_sst()
+    ds_surf = get_physics()
+    ds_bgc  = get_bgc()
+    ds_wav  = get_waves()
+
+    for site in UNIQUE_SITES:
+        sid = site["site"]
+        nearest_wet_point(ds_sst,  site["lat"], site["lon"], tag=f"sst:{sid}")
+        nearest_wet_point(ds_surf, site["lat"], site["lon"], tag=f"glorys:{sid}")
+        nearest_wet_point(ds_bgc,  site["lat"], site["lon"], tag=f"bgc:{sid}")
+        nearest_wet_point(ds_wav,  site["lat"], site["lon"], tag=f"wave:{sid}")
+
+    # BRAN: one month per variable is enough to read the mask
+    probe = pd.Timestamp(CLIM_START)
+    for nc_var, (field, prefix) in BRAN_VARS.items():
+        url = f"{BRAN_BASE}/{nc_var}_{probe.year}_{probe.month:02d}.nc"
+        try:
+            ds = xr.open_dataset(url, engine="netcdf4")
+            rn = {old: new for old, new in
+                  [("xt_ocean","longitude"),("yt_ocean","latitude"),
+                   ("st_ocean","depth"),("Time","time")] if old in ds.dims}
+            if rn:
+                ds = ds.rename(rn)
+            ds = ds.sel(latitude=slice(LAT_MIN, LAT_MAX),
+                        longitude=slice(LON_MIN, LON_MAX))
+            if "depth" in ds.dims:
+                ds = ds.isel(depth=0, drop=True)
+            for site in UNIQUE_SITES:
+                nearest_wet_point(ds, site["lat"], site["lon"],
+                                  ref_var=field, tag=f"{prefix}:{site['site']}")
+            ds.close()
+        except Exception as e:
+            print(f"  BRAN probe failed for {prefix}: {e}")
+
+    write_lookup_report(OUT_DIR)
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -581,6 +745,9 @@ def main():
     df_clim.to_csv(clim_csv,   index=False)
     df_sample.to_csv(sample_csv, index=False)
 
+    # --- audit how far each coastal lookup travelled ---
+    write_lookup_report(OUT_DIR)
+
     print(f"\n Done!")
     print(f"  Climatology CSV:  {clim_csv}")
     print(f"    Shape: {df_clim.shape[0]} sites × {df_clim.shape[1]} variables")
@@ -591,4 +758,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--audit" in sys.argv:
+        audit_wet_lookups()
+    else:
+        main()
