@@ -1,7 +1,7 @@
 """
 stitch_results.py
 -----------------
-Combines every per-folder kelp_coverage_results.csv (written by
+Combines every per-folder kelp_photo_results.csv (written by
 measure_kelp_coverage.py, one per date folder) into a single
 master_results.csv, renaming columns to the schema analyse_kelp.R reads.
 
@@ -53,10 +53,10 @@ def main():
     args = ap.parse_args()
 
     files = sorted(glob.glob(
-        os.path.join(args.root, "**", "kelp_coverage_results.csv"),
+        os.path.join(args.root, "**", "kelp_photo_results.csv"),
         recursive=True))
     if not files:
-        sys.exit(f"No kelp_coverage_results.csv found under {args.root}")
+        sys.exit(f"No kelp_photo_results.csv found under {args.root}")
 
     print(f"Found {len(files)} result file(s):")
     for f in files:

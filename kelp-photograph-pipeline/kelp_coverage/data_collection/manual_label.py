@@ -42,7 +42,7 @@ import subprocess
 from pathlib import Path
 
 CSV_FIELDS = ["old_stem", "left", "right", "date", "dt"]
-CSV_NAME = "manual_labels.csv"
+CSV_NAME = "rename_map.csv"
 
 
 def _exif_datetime(path):

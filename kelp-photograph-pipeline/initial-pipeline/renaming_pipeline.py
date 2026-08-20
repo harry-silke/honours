@@ -78,7 +78,13 @@ def convert(p):
     import io
     import rawpy
     import imageio.v3 as iio
-    from PIL import Image
+    from PIL import Image3
+
+    renamed = {}
+    if p["csv"].exists():
+        with open(p["csv"]) as f:
+            rows = _numbered_rows(list(csv.DictReader(f)))
+        renamed = {r["old_stem"]: r["new_stem"] for r in rows}
 
     if not p["raw"].is_dir():
         sys.exit(f"Raws folder not found: {p['raw']}")
@@ -90,18 +96,6 @@ def convert(p):
     if not raws:
         sys.exit(f"No files matching {RAW_GLOB} in {p['raw']}/. "
                  "On Linux the glob is case-sensitive: check .arw vs .ARW.")
-
-    converted = 0
-    for raw_path in raws:
-        try:
-            with rawpy.imread(str(raw_path)) as raw:
-                rgb = raw.postprocess(use_camera_wb=True)  # 8-bit RGB
-        except Exception as e:
-            # one unreadable file shouldn't kill the whole run
-            print(f"SKIP {raw_path.name}: {e}")
-            continue
-        stem = raw_path.stem
-
         # full-size TIFF: this is the real data
         iio.imwrite(p["tiff"] / f"{stem}.tif", rgb)
 
@@ -124,7 +118,8 @@ def convert(p):
     print(f"\nDone. {converted} of {len(raws)} raws -> {p['jpeg']}/ and {p['tiff']}/")
 
 
-# ----------------------------------------------------------------------
+# --------------------------------7 22
+# --------------------------------------
 # Stage 1: Claude reads both jar IDs, build rename_map.csv
 # ----------------------------------------------------------------------
 PROMPT = """Respond with ONLY a JSON object. No preamble, no explanation, no markdown.
