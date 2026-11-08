@@ -78,7 +78,7 @@ def convert(p):
     import io
     import rawpy
     import imageio.v3 as iio
-    from PIL import Image3
+    from PIL import Image
 
     renamed = {}
     if p["csv"].exists():
@@ -96,6 +96,24 @@ def convert(p):
     if not raws:
         sys.exit(f"No files matching {RAW_GLOB} in {p['raw']}/. "
                  "On Linux the glob is case-sensitive: check .arw vs .ARW.")
+
+    converted = 0
+    for raw_path in raws:
+        stem = raw_path.stem
+        jpeg_done = (p["jpeg"] / f"{stem}.jpg").exists()
+        tiff_done = ((p["tiff"] / f"{stem}.tif").exists()
+                     or (stem in renamed
+                         and (p["tiff"] / f"{renamed[stem]}.tif").exists()))
+        if jpeg_done and tiff_done:
+            continue
+        try:
+            with rawpy.imread(str(raw_path)) as raw:
+                rgb = raw.postprocess(use_camera_wb=True)  # 8-bit RGB
+        except Exception as e:
+            # one unreadable file shouldn't kill the whole run
+            print(f"SKIP {raw_path.name}: {e}")
+            continue
+
         # full-size TIFF: this is the real data
         iio.imwrite(p["tiff"] / f"{stem}.tif", rgb)
 

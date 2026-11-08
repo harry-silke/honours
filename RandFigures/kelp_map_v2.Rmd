@@ -1,0 +1,349 @@
+---
+title: "*Macrocystis pyrifera* — Study Population Maps"
+subtitle: "IMAS Honours 2026 — Harry Silke"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=7, dpi=150)
+```
+
+## What changed from the previous version
+
+Two things, and nothing else. The geometry, the site list, the insets and the
+composition are untouched.
+
+**The colours are now the validated cluster palette**, the same five used on
+the genetic-distance line, in the crossing diagram and in Figure 2. Before
+this, the map and the distance line sitting beside it on the same slide used
+two different colour systems: South-east Tas was teal on one and dark grey on
+the other, South Tas was green on one and blue on the other. Only East Tas
+happened to agree. The palette was checked for colour-vision deficiency:
+worst normal-vision delta-E 19.0, worst dichromat 14.2, worst contrast 3.40:1.
+South-east Tas is deliberately the neutral dark grey, because it is the one
+population in every cross.
+
+**The names can be either form.** `USE_SHORT_NAMES` at the top switches the
+legend between the short regional names used in the talk and the full cluster
+names the thesis should keep. The colours and the site labels are the same
+either way, so both versions stay in step.
+
+```{r libraries}
+library(ggplot2)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggrepel)
+library(cowplot)
+```
+
+## Shared data
+
+```{r base-data}
+aus_states <- ne_countries(country = "Australia", scale = "medium",
+                           returnclass = "sf")
+
+# TRUE for the talk, FALSE for the thesis.
+USE_SHORT_NAMES <- TRUE
+
+# Validated cluster palette, shared with the distance line and Figure 2.
+# Order is the one used on the distance line: the focal population first,
+# then the close partner, then the three medium ones.
+pal <- c("#333333", "#008CDF", "#D76F0B", "#A74371", "#0C33A0")
+
+pop_full <- c("Frederick Henry\n& Storm Bays",
+              "Actaeon Island\n& Southport",
+              "St Helens Point\n& Falmouth",
+              "East Coast\nVictoria",
+              "North Coast\nTasmania")
+
+pop_short <- c("SE Tas", "S Tas", "E Tas", "E Vic", "N Tas")
+
+pop_labels  <- if (USE_SHORT_NAMES) pop_short else pop_full
+pop_colours <- setNames(pal, pop_labels)
+pop_levels  <- pop_labels
+
+# Publication-style base theme — B&W
+base_theme <- theme_bw(base_size = 10) +
+  theme(
+    plot.title        = element_text(face = "bold", size = 10, colour = "black"),
+    plot.subtitle     = element_text(size = 8, colour = "grey30"),
+    plot.caption      = element_text(size = 7, colour = "grey50", hjust = 0),
+    panel.background  = element_rect(fill = "white", colour = "black"),
+    panel.grid.major  = element_line(colour = "grey90", linewidth = 0.3),
+    panel.grid.minor  = element_blank(),
+    plot.background   = element_rect(fill = "white", colour = NA),
+    plot.margin       = margin(5, 5, 5, 5),
+    legend.background = element_rect(fill = "white", colour = "grey70",
+                                     linewidth = 0.3),
+    legend.title      = element_text(size = 8, face = "bold"),
+    legend.text       = element_text(size = 7),
+    legend.key.size   = unit(0.4, "cm"),
+    legend.position   = "top",
+    legend.direction  = "horizontal",
+    axis.title        = element_text(size = 8),
+    axis.text         = element_text(size = 7)
+  )
+```
+
+## Site data
+
+Only the 11 sites that contributed gametophytes to the crossing experiment.
+Sites sampled in the population genomic survey but not used here have been
+dropped, including Cod Bay, George Rocks and Ben's Creek, which belong to a
+separate CSIRO cluster and were previously shown in the St Helens colour in
+error.
+
+```{r sites-data}
+# Six individuals per cluster, drawn from the site codes below.
+#
+#   SE Tas, Frederick Henry & Storm Bays  LSI_4, LSI_5, LSI_6, LSI_7, LSI_20, IOC_9
+#   S Tas,  Actaeon Island & Southport    ACT_4, ACT_5, ACT_17, FSH_3, FSH_7, FSH_16
+#   E Tas,  St Helens Point & Falmouth    SHL_4, SHL_5, SHL_17, BBB_13, BBB_14, BBB_17
+#   E Vic,  East Coast Victoria           DIP_1, DIP_3, DIP_7, SDP_13, SDP_15, PHK_4
+#   N Tas,  North Coast Tasmania          ULV_2, ULV_3, ULV_15, DEV_10, DEV_11, DEV_16
+
+sites_all <- data.frame(
+  site = c("ACT", "FSH",
+           "LSI", "IOC",
+           "SHL", "BBB",
+           "ULV", "DEV",
+           "DIP", "SDP", "PHK"),
+  location = c(
+    "Actaeon Island", "Fishers Point",
+    "Little Spectacle Is.", "Isle of Caves",
+    "Shelly Point", "Beerbarrel Beach",
+    "Black Jack Rock", "Devonport",
+    "Petrel Point", "Sandpatch Point", "Stable Bay"
+  ),
+  lon = c(
+    146.9943, 146.9266,
+    147.5995, 147.6505,
+    148.2785, 148.3599,
+    146.1649, 146.3702,
+    149.4323, 149.6060, 149.2816
+  ),
+  lat = c(
+    -43.5258, -43.5742,
+    -42.8674, -42.9083,
+    -41.4353, -41.2835,
+    -41.1361, -41.1670,
+    -37.7809, -37.7096, -37.7979
+  ),
+  # index into pop_labels, so the labels can be switched without touching this
+  pop_key = c(2, 2,
+              1, 1,
+              3, 3,
+              5, 5,
+              4, 4, 4),
+  n_individuals = c(3, 3, 5, 1, 3, 3, 3, 3, 3, 2, 1)
+)
+sites_all$population <- factor(pop_labels[sites_all$pop_key],
+                               levels = pop_levels)
+
+# individuals per cluster, as a check
+aggregate(n_individuals ~ population, sites_all, sum)
+```
+
+
+## Main map
+
+```{r main-map, fig.width=10, fig.height=7}
+
+# Inset box coordinates — SE Tasmania clusters.
+# coord_sf holds equal ground distances, so a square panel needs the
+# longitude span widened by 1/cos(latitude): at ~43.2 S that is a factor of
+# about 1.37. Computed rather than hard-coded so it stays square if the
+# extent is changed.
+inset_ylim   <- c(-43.7, -42.7)
+inset_ymid   <- mean(inset_ylim)
+lat_span     <- diff(inset_ylim)
+lon_span     <- lat_span / cos(inset_ymid * pi / 180)
+inset_xmid   <- 147.30
+inset_xlim   <- inset_xmid + c(-1, 1) * lon_span / 2
+
+# Numeric graticule breaks. coord_sf passes these to sf::st_graticule(),
+# which needs actual values, not a breaks function.
+inset_xbreaks <- seq(ceiling(inset_xlim[1] * 2) / 2,
+                     floor(inset_xlim[2] * 2) / 2, by = 0.5)
+inset_ybreaks <- seq(ceiling(inset_ylim[1] * 2) / 2,
+                     floor(inset_ylim[2] * 2) / 2, by = 0.5)
+
+# Main map extent
+xlim_main <- c(143.8, 150.9)
+ylim_main <- c(-44.8, -36.5)
+
+p_main <- ggplot() +
+  geom_sf(data = aus_states,
+          fill = "grey95", colour = "grey40", linewidth = 0.3) +
+  coord_sf(xlim = xlim_main, ylim = ylim_main, expand = FALSE) +
+  geom_point(
+    data  = sites_all,
+    aes(x = lon, y = lat, fill = population),
+    shape = 21, size = 3, stroke = 0.6, colour = "black"
+  ) +
+  # Labels for non-clustered sites only (SE TAS cluster is in the inset)
+  geom_text_repel(
+    data  = subset(sites_all, lat > -42.6),
+    aes(x = lon, y = lat, label = location, colour = population),
+    size          = 2.2,
+    lineheight    = 0.85,
+    box.padding   = unit(0.25, "lines"),
+    point.padding = unit(0.25, "lines"),
+    segment.size  = 0.3,
+    max.overlaps  = 25,
+    seed          = 42,
+    show.legend   = FALSE
+  ) +
+  scale_fill_manual(values = pop_colours, name = "Population") +
+  scale_colour_manual(values = pop_colours) +
+  # Inset box outline
+  annotate("rect",
+           xmin = inset_xlim[1], xmax = inset_xlim[2],
+           ymin = inset_ylim[1], ymax = inset_ylim[2],
+           fill = NA, colour = "black", linewidth = 0.6) +
+  # State labels
+  annotate("text", x = 146.0, y = -42.0, label = "Tasmania",
+           fontface = "italic", colour = "grey30", size = 3.5) +
+  annotate("text", x = 144.5, y = -37.8, label = "Victoria",
+           fontface = "italic", colour = "grey30", size = 3.0) +
+  annotate("text", x = 139.5, y = -36.8, label = "South Australia",
+           fontface = "italic", colour = "grey30", size = 3.0) +
+  scale_x_continuous(name = "Longitude",
+                     breaks = seq(139, 151, 3),
+                     labels = function(x) paste0(x, "°E")) +
+  scale_y_continuous(name = "Latitude",
+                     breaks = seq(-44, -37, 2),
+                     labels = function(y) paste0(abs(y), "°S")) +
+  base_theme +
+  guides(fill = guide_legend(override.aes = list(size = 3.5),
+                             nrow = if (USE_SHORT_NAMES) 1 else 2),
+         colour = "none")
+
+p_main
+```
+
+## Inset map — SE Tasmania cluster
+
+```{r inset-map, fig.width=4, fig.height=4}
+# rendered square: extent is square and the chunk dimensions match
+
+se_tas <- subset(sites_all, lat <= -42.6)
+
+p_inset <- ggplot() +
+  geom_sf(data = aus_states,
+          fill = "grey95", colour = "grey40", linewidth = 0.3) +
+  coord_sf(xlim = inset_xlim, ylim = inset_ylim, expand = FALSE) +
+  geom_point(
+    data  = se_tas,
+    aes(x = lon, y = lat, fill = population),
+    shape = 21, size = 3, stroke = 0.6, colour = "black"
+  ) +
+  geom_text_repel(
+    data  = se_tas,
+    aes(x = lon, y = lat, label = location, colour = population),
+    size          = 2.0,
+    lineheight    = 0.85,
+    box.padding   = unit(0.2, "lines"),
+    point.padding = unit(0.2, "lines"),
+    segment.size  = 0.3,
+    max.overlaps  = 30,
+    seed          = 42,
+    show.legend   = FALSE
+  ) +
+  scale_fill_manual(values = pop_colours) +
+  scale_colour_manual(values = pop_colours) +
+  scale_x_continuous(name = NULL,
+                     breaks = inset_xbreaks,
+                     labels = function(x) paste0(x, "°E")) +
+  scale_y_continuous(name = NULL,
+                     breaks = inset_ybreaks,
+                     labels = function(y) paste0(abs(y), "°S")) +
+  theme_bw(base_size = 8) +
+  theme(
+    panel.background = element_rect(fill = "white", colour = "black",
+                                    linewidth = 0.8),
+    panel.grid.major = element_line(colour = "grey90", linewidth = 0.3),
+    panel.grid.minor = element_blank(),
+    plot.background  = element_rect(fill = "white", colour = "black",
+                                    linewidth = 0.8),
+    axis.text        = element_text(size = 6),
+    legend.position  = "none",
+    plot.margin      = margin(2, 2, 2, 2)
+  )
+
+p_inset
+```
+
+## Locator inset — whole of Australia
+
+```{r locator-map, fig.width=3, fig.height=3}
+p_locator <- ggplot() +
+  geom_sf(data = aus_states,
+          fill = "grey90", colour = "grey40", linewidth = 0.25) +
+  annotate("rect",
+           xmin = xlim_main[1], xmax = xlim_main[2],
+           ymin = ylim_main[1], ymax = ylim_main[2],
+           fill = NA, colour = "black", linewidth = 0.7) +
+  coord_sf(xlim = c(112, 155), ylim = c(-44.5, -9), expand = FALSE) +
+  theme_void() +
+  theme(
+    panel.background = element_rect(fill = "white", colour = "black",
+                                    linewidth = 0.7),
+    plot.background  = element_rect(fill = "white", colour = "black",
+                                    linewidth = 0.7),
+    plot.margin      = margin(2, 2, 2, 2)
+  )
+
+p_locator
+```
+
+## Combined figure with insets
+
+```{r combined, fig.width=10, fig.height=7, fig.cap="**Figure X.** Origin of the gametophytes used in this study: 11 sites across five populations of *Macrocystis pyrifera* in Tasmania and East Gippsland, Victoria. Six individuals were drawn from each. The upper left inset locates the study region within Australia; the lower right inset shows the south-eastern Tasmanian sites in greater detail. Cluster assignments and site coordinates from the CSIRO population genomic survey (Scharfenstein et al., YEAR)."}
+
+fig_w <- 10; fig_h <- 7
+inset_side   <- 3.0                    # SE Tasmania detail, inches
+locator_side <- 1.9                    # Australia locator, inches
+
+combined <- ggdraw(p_main) +
+  draw_plot(
+    p_inset,
+    x = 0.69, y = 0.03,
+    width  = inset_side / fig_w,
+    height = inset_side / fig_h
+  ) +
+  draw_plot(
+    p_locator,
+    x = 0.015, y = 1 - 0.02 - locator_side / fig_h,
+    width  = locator_side / fig_w,
+    height = locator_side / fig_h
+  )
+combined
+```
+
+## Save outputs
+
+```{r save, eval=TRUE}
+out <- if (USE_SHORT_NAMES) "kelp_map_talk.png" else "kelp_map_thesis.png"
+
+ggsave(out, plot = combined, width = 10, height = 7, dpi = 300, bg = "white")
+```
+
+## Naming note
+
+Three naming systems are now in play. State the mapping wherever you cite the
+CSIRO work for the cluster delineation.
+
+| Talk | Thesis | CSIRO project update | Colour |
+|:---|:---|:---|:---|
+| SE Tas | Frederick Henry & Storm Bays | Frederick Henry & Storm Bays | `#333333` |
+| S Tas | Actaeon Island & Southport | Actaeon Island, Sisters & Recherche Bays | `#008CDF` |
+| E Tas | St Helens Point & Falmouth | St Helens & Shelly Points | `#D76F0B` |
+| E Vic | East Coast Victoria | Wilderness Coast | `#A74371` |
+| N Tas | North Coast Tasmania | Mersey & Leven river mouths | `#0C33A0` |

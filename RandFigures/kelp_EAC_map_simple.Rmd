@@ -1,0 +1,148 @@
+---
+title: "EAC map, simplified for the talk"
+subtitle: "IMAS Honours 2026 — Harry Silke"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, dpi = 150)
+```
+
+## What this version is for
+
+The slide-deck version of the EAC map. It keeps the corrected pathway from
+`kelp_EAC_map_v3.Rmd`: the current runs bold to the separation point, the
+eastward branch takes the bold line and the arrowhead because that is where
+most of the transport goes, and the southward extension is thin and dashed.
+The eddy circles are gone.
+
+What is stripped back is everything else. Type is enlarged throughout,
+because this is read from the back of a room rather than off a page. The axis
+titles are gone and the ticks are down to every eight degrees, since nobody
+reads coordinates off a slide. The source note is dropped: on the slide it
+lives in the footer, set in the deck's own citation style, where it is legible.
+
+```{r libraries}
+library(ggplot2)
+library(dplyr)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+```
+
+```{r load-sst}
+# NOAA OISST V2.1, annual mean 2015. Keep the CSV beside this Rmd.
+sst_mean <- read.csv("oisst_annual_mean_seaus.csv")
+
+aus <- ne_countries(country = "Australia", scale = "medium",
+                    returnclass = "sf")
+```
+
+```{r pathway}
+SEP_LON <- 153.0
+SEP_LAT <- -34.0
+
+# the EAC proper: ends where it leaves the coast
+eac_main <- data.frame(
+  lon = c(151.0, 153.5, 154.5, 155.0, 154.5, 154.0, SEP_LON),
+  lat = c(-22.0, -24.0, -26.0, -28.0, -30.0, -32.0, SEP_LAT)
+)
+
+# the Tasman Front: most of the transport, so this keeps the bold line
+tasman_front <- data.frame(
+  lon = c(SEP_LON, 154.5, 156.0, 157.6),
+  lat = c(SEP_LAT, -34.5, -35.0, -35.6)
+)
+
+# the extension: the remainder, reaching Tasmania
+eac_extension <- data.frame(
+  lon = c(SEP_LON, 152.5, 151.5, 151.0, 150.5, 149.5, 149.0),
+  lat = c(SEP_LAT, -36.0, -38.0, -40.0, -41.0, -42.0, -43.5)
+)
+```
+
+## Figure
+
+```{r sst-map-simple, fig.width=6, fig.height=8, fig.cap="Annual mean sea surface temperature along the east Australian coast (NOAA OISST V2.1, 2015). The East Australian Current separates near 34 degrees south, where most of its transport turns east. The remainder continues south as the EAC extension, carrying warm, nutrient-poor water to Tasmania."}
+
+p_simple <- ggplot() +
+  geom_raster(data = sst_mean, aes(x = lon, y = lat, fill = sst),
+              interpolate = TRUE) +
+  scale_fill_gradientn(
+    colours  = c("#053061", "#2166ac", "#4393c3", "#92c5de",
+                 "#fddbc7", "#f4a582", "#d6604d", "#b2182b", "#67001f"),
+    name     = "Mean annual\nSST (°C)",
+    na.value = "white", limits = c(11, 27), breaks = seq(12, 26, 4)
+  ) +
+  geom_sf(data = aus, fill = "#d4c5a9", colour = "#8a7560",
+          linewidth = 0.4) +
+
+  # the current, bold to the separation point, no arrowhead yet
+  geom_path(data = eac_main, aes(lon, lat), colour = "white",
+            linewidth = 1.4, lineend = "round", linejoin = "round") +
+
+  # the Tasman Front keeps the bold line and takes the arrowhead
+  geom_path(data = tasman_front, aes(lon, lat), colour = "white",
+            linewidth = 1.4, lineend = "round", linejoin = "round",
+            arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
+
+  # the extension, thin and dashed, with an open arrowhead
+  geom_path(data = eac_extension, aes(lon, lat), colour = "white",
+            linewidth = 0.8, linetype = "22", lineend = "round",
+            arrow = arrow(length = unit(0.22, "cm"), type = "open")) +
+
+  # marker so the separation label has something to point at
+  geom_point(aes(x = SEP_LON, y = SEP_LAT), shape = 21, size = 2.4,
+             colour = "white", fill = "white", stroke = 0.6) +
+
+  annotate("rect", xmin = 143.5, xmax = 150.5, ymin = -40.5, ymax = -38.5,
+           fill = NA, colour = "white", linewidth = 0.6,
+           linetype = "dashed") +
+  annotate("text", x = 146.5, y = -38.9, label = "Bass Strait",
+           colour = "white", size = 3.4, fontface = "italic") +
+
+  annotate("text", x = 150.3, y = -21.2,
+           label = "East Australian\nCurrent",
+           colour = "white", size = 4.4, fontface = "bold",
+           lineheight = 0.9, hjust = 0) +
+  annotate("text", x = 152.2, y = -36.8,
+           label = "separates ~34°S,\nmost flow turns east",
+           colour = "white", size = 3.0, fontface = "italic",
+           lineheight = 0.9, hjust = 0) +
+  annotate("text", x = 151.9, y = -42.2,
+           label = "warm,\nnutrient-poor\nwater",
+           colour = "white", size = 3.8, fontface = "italic",
+           lineheight = 0.9, hjust = 0) +
+  annotate("text", x = 145.0, y = -42.3, label = "Tasmania",
+           colour = "grey20", size = 4.6, fontface = "italic") +
+  annotate("text", x = 142.5, y = -37.5, label = "Victoria",
+           colour = "grey20", size = 4.0, fontface = "italic") +
+
+  coord_sf(xlim = c(138, 158), ylim = c(-45, -20), expand = FALSE) +
+  scale_x_continuous(breaks = seq(140, 156, 8),
+                     labels = function(x) paste0(x, "°E")) +
+  scale_y_continuous(breaks = seq(-44, -20, 8),
+                     labels = function(y) paste0(abs(y), "°S")) +
+  labs(x = NULL, y = NULL) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.background  = element_rect(fill = "#cde8f0", colour = NA),
+    panel.grid        = element_blank(),
+    plot.background   = element_rect(fill = "white", colour = NA),
+    axis.text         = element_text(size = 10, colour = "grey45"),
+    legend.title      = element_text(size = 11),
+    legend.text       = element_text(size = 10),
+    legend.position   = "right",
+    legend.key.height = unit(1.5, "cm"),
+    plot.margin       = margin(5, 5, 5, 5)
+  )
+
+```
+
+```{r save}
+ggsave("kelp_EAC_SST_map_simple.png", p_simple, width = 6, height = 8,
+       dpi = 300, bg = "white")
+```

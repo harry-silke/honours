@@ -1,0 +1,252 @@
+---
+title: "*Macrocystis pyrifera* — Crossing Design Map"
+subtitle: "IMAS Honours 2026 — Harry Silke"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, message=FALSE, warning=FALSE,
+                      fig.width=8, fig.height=8, dpi=150)
+```
+
+## Setup
+
+```{r libraries}
+library(ggplot2)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+```
+
+## Shared data
+
+Cluster colours, base map and site coordinates. Duplicated from the site-map
+document deliberately, so the two render independently.
+
+```{r base-data}
+aus_states <- ne_countries(country = "Australia", scale = "medium",
+                           returnclass = "sf")
+
+pop_colours <- c(
+  "Actaeon Island\n& Southport"        = "#2e8b57",
+  "Frederick Henry\n& Storm Bays"      = "#1a6b8a",
+  "St Helens Point\n& Falmouth"        = "#e07b39",
+  "North Coast\nTasmania"              = "#8b2fc9",
+  "East Coast\nVictoria"               = "#c0392b"
+)
+pop_levels <- names(pop_colours)
+
+base_theme <- theme_bw(base_size = 10) +
+  theme(
+    plot.title        = element_text(face = "bold", size = 10, colour = "black"),
+    plot.caption      = element_text(size = 7, colour = "grey50", hjust = 0),
+    panel.background  = element_rect(fill = "white", colour = "black"),
+    panel.grid.major  = element_line(colour = "grey90", linewidth = 0.3),
+    panel.grid.minor  = element_blank(),
+    plot.background   = element_rect(fill = "white", colour = NA),
+    plot.margin       = margin(5, 5, 5, 5),
+    legend.background = element_rect(fill = "white", colour = "grey70",
+                                     linewidth = 0.3),
+    legend.title      = element_text(size = 8, face = "bold"),
+    legend.text       = element_text(size = 7),
+    legend.key.size   = unit(0.4, "cm"),
+    legend.position   = "top",
+    legend.direction  = "horizontal",
+    legend.box        = "vertical",
+    legend.box.just   = "left",
+    legend.spacing.y  = unit(0.15, "cm"),
+    legend.margin     = margin(2, 4, 2, 4),
+    axis.title        = element_text(size = 8),
+    axis.text         = element_text(size = 7)
+  )
+```
+
+## Site data
+
+The 11 sites that contributed gametophytes, six individuals per cluster.
+
+```{r sites-data}
+sites_all <- data.frame(
+  site = c("ACT", "FSH",
+           "LSI", "IOC",
+           "SHL", "BBB",
+           "ULV", "DEV",
+           "DIP", "SDP", "PHK"),
+  location = c(
+    "Actaeon Island", "Fishers Point",
+    "Little Spectacle Is.", "Isle of Caves",
+    "Shelly Point", "Beerbarrel Beach",
+    "Black Jack Rock", "Devonport",
+    "Petrel Point", "Sandpatch Point", "Stable Bay"
+  ),
+  lon = c(
+    146.9943, 146.9266,
+    147.5995, 147.6505,
+    148.2785, 148.3599,
+    146.1649, 146.3702,
+    149.4323, 149.6060, 149.2816
+  ),
+  lat = c(
+    -43.5258, -43.5742,
+    -42.8674, -42.9083,
+    -41.4353, -41.2835,
+    -41.1361, -41.1670,
+    -37.7809, -37.7096, -37.7979
+  ),
+  population = c(
+    rep("Actaeon Island\n& Southport", 2),
+    rep("Frederick Henry\n& Storm Bays", 2),
+    rep("St Helens Point\n& Falmouth", 2),
+    rep("North Coast\nTasmania", 2),
+    rep("East Coast\nVictoria", 3)
+  ),
+  n_individuals = c(3, 3, 5, 1, 3, 3, 3, 3, 3, 2, 1)
+)
+sites_all$population <- factor(sites_all$population, levels = pop_levels)
+
+aggregate(n_individuals ~ population, sites_all, sum)
+```
+
+## Crossing design data
+
+```{r cross-design-data}
+# Cluster centroids from the site coordinates
+centroids <- aggregate(cbind(lon, lat) ~ population, sites_all, mean)
+
+short_lookup <- c("Actaeon Island\n& Southport"   = "AIS",
+                  "Frederick Henry\n& Storm Bays" = "FHS",
+                  "St Helens Point\n& Falmouth"   = "SHP",
+                  "North Coast\nTasmania"         = "NCT",
+                  "East Coast\nVictoria"          = "ECV")
+centroids$pop_short <- short_lookup[as.character(centroids$population)]
+
+hub <- subset(centroids, pop_short == "FHS")
+
+# Pairwise Fst against FH & Storm Bays, from the CSIRO population genomics
+fst_vals <- c(AIS = 0.18, SHP = 0.43, NCT = 0.51, ECV = 0.41)
+
+spokes <- subset(centroids, pop_short != "FHS")
+spokes$x_hub <- hub$lon
+spokes$y_hub <- hub$lat
+spokes$fst   <- fst_vals[spokes$pop_short]
+spokes$label <- sprintf("F[ST]==%.2f", spokes$fst)
+spokes$lab_x <- (spokes$lon + spokes$x_hub) / 2
+spokes$lab_y <- (spokes$lat + spokes$y_hub) / 2
+
+# Crossing type. Between-cluster pairs join geographically separate
+# populations (allopatric); within-cluster diallels join individuals from the
+# same population (sympatric).
+cross_cols <- c("Allopatric (between cluster)" = "#333333",
+                "Sympatric (within cluster)"   = "#d81b60")
+spokes$cross_type <- factor("Allopatric (between cluster)",
+                            levels = names(cross_cols))
+
+# Within-cluster diallels: FH x FH and ECV x ECV
+within_pops <- subset(centroids, pop_short %in% c("FHS", "ECV"))
+
+# An open loop: leaves the node, curls round, and comes back to it. Drawn as
+# a teardrop so the two ends meet at the node rather than forming a detached
+# circle. `ang` rotates the whole loop, `r` sets its size.
+loop_path <- function(x0, y0, r = 0.30, ang = 90, n = 80, squash = 0.78) {
+  th  <- seq(-pi, pi, length.out = n)
+  # cardioid-like teardrop in local coords, cusp at the origin
+  rad <- r * (1 - cos(th))
+  lx  <- rad * sin(th)
+  ly  <- rad * cos(th)
+  a   <- ang * pi / 180
+  data.frame(
+    lon = x0 + (lx * cos(a) - ly * sin(a)),
+    lat = y0 + (lx * sin(a) + ly * cos(a)) * squash
+  )
+}
+# FHS sits between the spokes, so its loop points west; ECV is at the top
+# right, so its loop points northeast.
+loop_angle <- c(FHS = 200, ECV = 25)
+loops <- do.call(rbind, lapply(seq_len(nrow(within_pops)), function(i) {
+  ps <- within_pops$pop_short[i]
+  d  <- loop_path(within_pops$lon[i], within_pops$lat[i],
+                  ang = loop_angle[[ps]])
+  d$pop_short <- ps
+  d
+}))
+loops$cross_type <- factor("Sympatric (within cluster)",
+                           levels = names(cross_cols))
+
+centroids[, c("pop_short", "lon", "lat")]
+```
+
+## Crossing design map
+
+```{r cross-design-map, fig.width=8, fig.height=8, fig.cap="**Figure X.** Crossing design shown geographically. Each arc joins Frederick Henry & Storm Bays to one of the four other genetic clusters and represents 36 crosses in each direction (72 per pair, 288 between-cluster crosses in total). Loops mark the sympatric within-cluster diallels, 36 crosses each within Frederick Henry & Storm Bays and within East Coast Victoria. Pairwise F~ST~ against Frederick Henry & Storm Bays is shown on each arc. No crosses were made between two non-hub clusters."}
+
+p_cross_design <- ggplot() +
+  geom_sf(data = aus_states,
+          fill = "grey95", colour = "grey40", linewidth = 0.3) +
+  coord_sf(xlim = c(144.3, 151.2), ylim = c(-44.3, -36.8), expand = FALSE) +
+  # reciprocal arcs, double-headed
+  geom_curve(
+    data = spokes,
+    aes(x = x_hub, y = y_hub, xend = lon, yend = lat,
+        linewidth = fst, colour = cross_type),
+    curvature = 0.18,
+    arrow = arrow(length = unit(0.16, "cm"), ends = "both", type = "closed")
+  ) +
+  # within-cluster loops
+  geom_path(data = loops,
+            aes(x = lon, y = lat, group = pop_short, colour = cross_type),
+            linewidth = 0.7,
+            arrow = arrow(length = unit(0.14, "cm"), ends = "last",
+                          type = "closed")) +
+  # Fst labels
+  geom_label(
+    data = spokes,
+    aes(x = lab_x, y = lab_y, label = label),
+    parse = TRUE, size = 2.6, label.size = 0, fill = "white",
+    label.padding = unit(0.12, "lines"), colour = "grey25"
+  ) +
+  # cluster nodes
+  geom_point(
+    data = centroids,
+    aes(x = lon, y = lat, fill = population),
+    shape = 21, size = 6, stroke = 0.8, colour = "black"
+  ) +
+  geom_text(
+    data = centroids,
+    aes(x = lon, y = lat, label = pop_short),
+    size = 2.1, fontface = "bold", colour = "white"
+  ) +
+  scale_fill_manual(values = pop_colours, name = "Genetic cluster") +
+  scale_linewidth_continuous(range = c(0.5, 1.8), name = expression(F[ST]),
+                             breaks = c(0.2, 0.35, 0.5),
+                             limits = c(0.15, 0.55)) +
+  scale_colour_manual(values = cross_cols, name = "Crossing type") +
+  annotate("text", x = 146.3, y = -42.3, label = "Tasmania",
+           fontface = "italic", colour = "grey35", size = 3.2) +
+  annotate("text", x = 147.6, y = -37.3, label = "Victoria",
+           fontface = "italic", colour = "grey35", size = 3.0) +
+  scale_x_continuous(name = "Longitude", breaks = seq(145, 151, 2),
+                     labels = function(x) paste0(x, "\u00b0E")) +
+  scale_y_continuous(name = "Latitude", breaks = seq(-44, -37, 2),
+                     labels = function(y) paste0(abs(y), "\u00b0S")) +
+  base_theme +
+  guides(fill   = guide_legend(override.aes = list(size = 4), nrow = 2,
+                               order = 1),
+         colour = guide_legend(override.aes = list(linewidth = 1.1),
+                               nrow = 2, order = 2),
+         linewidth = guide_legend(order = 3, nrow = 1,
+                                  override.aes = list(colour = "grey30")))
+
+p_cross_design
+```
+
+## Save output
+
+```{r cross-design-save, eval=TRUE}
+ggsave("cross_design_map.png", plot = p_cross_design,
+       width = 8, height = 8, dpi = 300, bg = "white")
+```
